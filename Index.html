@@ -1,0 +1,2193 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#060d1a">
+<title>Jet Test Cell — Simulador de Turborreactor</title>
+<!--
+  JET TEST CELL — Simulador interactivo de turborreactor (modelo 0D)
+  ------------------------------------------------------------------
+  Archivo único y autocontenido: HTML + CSS + JavaScript vanilla.
+  · Sin dependencias ni recursos externos (todo el audio se sintetiza con Web Audio API).
+  · Modelo termodinámico: ciclo Brayton paramétrico simplificado (estaciones 0-2-3-4-5-9).
+  · Dinámica del carrete (spool) 0D con secuencia de arranque, FADEC, surge, flameout y daño.
+
+  Controles de teclado:
+    1      Arrancador   2      Ignición       3      Combustible
+    ↑ / ↓  Acelerador   P      Postquemador   D      FADEC
+    R      Reiniciar    M      Sonido         H      Puntos de información
+    Esc    Cerrar ficha de información
+  Interfaz y formatos numéricos en español de México (es-MX): 1,234.5
+-->
+<style>
+/* =====================================================================
+   1. TOKENS DE DISEÑO — industrial oscuro / azul marino institucional
+   ===================================================================== */
+:root{
+  --bg:#050b17;
+  --bg2:#08142a;
+  --panel:#0b1a33;
+  --panel-hi:#10244a;
+  --line:#1c3864;
+  --line-hi:#2b5592;
+  --ink:#dbe7f8;
+  --mute:#7d96bb;
+  --dim:#4d6688;
+  --accent:#3ea6ff;
+  --accent-2:#7cc4ff;
+  --ok:#35d684;
+  --warn:#ffb21f;
+  --bad:#ff3b52;
+  --ab:#ff8a2a;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --radius:10px;
+  --deck-h: 0px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:
+    radial-gradient(1200px 600px at 70% -10%, #0e2550 0%, transparent 60%),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.012) 0 1px, transparent 1px 48px),
+    repeating-linear-gradient(0deg, rgba(255,255,255,.012) 0 1px, transparent 1px 48px),
+    var(--bg);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:14px;
+  -webkit-font-smoothing:antialiased;
+  overscroll-behavior:none;
+}
+button,input,select{font:inherit;color:inherit}
+
+/* =====================================================================
+   2. BARRA SUPERIOR
+   ===================================================================== */
+.topbar{
+  position:sticky;top:0;z-index:30;
+  display:flex;align-items:center;gap:12px;
+  padding:10px 16px;
+  padding-top:max(10px, env(safe-area-inset-top));
+  background:linear-gradient(180deg,#0a1830,#071226);
+  border-bottom:1px solid var(--line);
+  box-shadow:0 6px 18px rgba(0,0,0,.35);
+}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand svg{flex:none}
+.brand h1{margin:0;font-size:15px;letter-spacing:.14em;font-weight:700;white-space:nowrap}
+.brand small{display:block;color:var(--mute);font-size:10.5px;letter-spacing:.12em;font-weight:500}
+.spacer{flex:1}
+.pill{
+  font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.1em;
+  padding:6px 10px;border-radius:999px;border:1px solid var(--line-hi);
+  background:#071226;color:var(--mute);white-space:nowrap
+}
+.pill.ok{color:var(--ok);border-color:#1f7a51;box-shadow:0 0 12px rgba(53,214,132,.18) inset}
+.pill.warn{color:var(--warn);border-color:#8a6214}
+.pill.info{color:var(--accent);border-color:#235a92}
+.pill.ab{color:#ffd7a8;border-color:var(--ab);background:#2a1405;box-shadow:0 0 14px rgba(255,138,42,.35)}
+.pill.alarm{color:#fff;background:#6b0d1a;border-color:var(--bad);animation:blink .5s steps(2) infinite}
+.tbtn{
+  border:1px solid var(--line-hi);background:var(--panel);border-radius:8px;
+  padding:7px 10px;font-size:12px;font-weight:600;letter-spacing:.06em;cursor:pointer;
+  font-family:var(--mono);white-space:nowrap
+}
+.tbtn:hover{border-color:var(--accent)}
+.tbtn[aria-pressed="true"]{color:var(--accent-2);border-color:var(--accent)}
+#btnDesign{display:none}
+
+/* =====================================================================
+   3. LAYOUT PRINCIPAL
+   ===================================================================== */
+.layout{
+  display:grid;
+  grid-template-columns:minmax(300px,370px) minmax(0,1fr) minmax(320px,370px);
+  gap:14px;padding:14px 16px;
+  padding-bottom:calc(var(--deck-h) + 16px);
+  max-width:1700px;margin:0 auto;
+}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{
+  position:relative;
+  background:linear-gradient(180deg,var(--panel-hi),var(--panel));
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:0 1px 0 rgba(255,255,255,.04) inset, 0 10px 24px rgba(0,0,0,.28);
+}
+/* tornillos decorativos de panel */
+.card.screws::before,.card.screws::after{
+  content:"";position:absolute;width:7px;height:7px;border-radius:50%;top:7px;
+  background:radial-gradient(circle at 35% 35%,#6c84a8,#1b2c48 70%);
+  box-shadow:0 0 0 1px #0a1428;
+}
+.card.screws::before{left:7px}.card.screws::after{right:7px}
+.card-h{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 14px 8px 20px;border-bottom:1px solid var(--line);
+  font-size:11px;letter-spacing:.16em;font-weight:700;color:var(--mute);text-transform:uppercase
+}
+.card-h b{color:var(--ink)}
+
+/* --- Instrumentos --- */
+.gauges{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px}
+.gauge{aspect-ratio:1/1;position:relative;border-radius:10px;background:#061022;border:1px solid #13284a}
+.gauge canvas{position:absolute;inset:0;width:100%;height:100%}
+.integrity{padding:4px 14px 14px}
+.integrity .row{display:flex;justify-content:space-between;font-size:11px;color:var(--mute);letter-spacing:.08em;margin-bottom:6px}
+.integrity .row b{font-family:var(--mono);color:var(--ink)}
+.bar{height:8px;border-radius:5px;background:#061022;border:1px solid #17305a;overflow:hidden}
+.bar i{display:block;height:100%;width:100%;background:linear-gradient(90deg,var(--ok),#9ff0c4);transition:width .2s}
+.bar.mid i{background:linear-gradient(90deg,var(--warn),#ffd77a)}
+.bar.low i{background:linear-gradient(90deg,var(--bad),#ff8a96)}
+.kv{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:0 14px 14px;font-size:12px}
+.kv span{color:var(--mute)}
+.kv b{font-family:var(--mono);font-weight:600;text-align:right}
+
+/* --- Vista del motor --- */
+.engine-wrap{position:relative;height:360px;border-radius:0 0 var(--radius) var(--radius);overflow:hidden}
+.engine-wrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.hint{
+  position:absolute;left:12px;bottom:12px;right:12px;
+  font-size:12.5px;font-weight:600;padding:8px 12px;border-radius:8px;
+  background:rgba(5,12,26,.78);border:1px solid var(--line-hi);backdrop-filter:blur(4px);
+  color:var(--accent-2);pointer-events:none
+}
+.hint.alarm{color:#ffd0d6;border-color:var(--bad)}
+
+/* --- Anunciadores --- */
+.annun{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:12px}
+.lamp{
+  font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.06em;text-align:center;
+  padding:8px 2px;border-radius:5px;border:1px solid #142a4c;background:#060f20;color:#2c4467;
+  line-height:1.15;min-height:36px;display:flex;align-items:center;justify-content:center;
+  transition:background .15s,color .15s
+}
+.lamp.on{color:#c9e6ff;background:#0c2c55;border-color:#2b6fb8;box-shadow:0 0 10px rgba(62,166,255,.3) inset}
+.lamp.ok{color:#c8ffe2;background:#0b3a26;border-color:#1f8a57;box-shadow:0 0 10px rgba(53,214,132,.3) inset}
+.lamp.armed{color:#ffd8b0;background:#2a1708;border-color:#7a4313}
+.lamp.warn{color:#1b1200;background:var(--warn);border-color:#ffd27a}
+.lamp.alarm{color:#fff;background:var(--bad);border-color:#ff8a98;animation:blink .45s steps(2) infinite}
+@keyframes blink{50%{filter:brightness(.45)}}
+
+/* --- Bitácora --- */
+.logcard{flex:1;min-height:180px;display:flex;flex-direction:column}
+.log{list-style:none;margin:0;padding:6px 0;overflow:auto;flex:1;max-height:260px;font-family:var(--mono);font-size:11.5px}
+.lg{display:grid;grid-template-columns:56px 1fr auto;gap:8px;padding:4px 14px;border-bottom:1px dashed rgba(43,85,146,.25)}
+.lg time{color:var(--dim)}
+.lg .cnt{color:var(--warn)}
+.lg.ok .m{color:#9ff0c4}.lg.warn .m{color:#ffd27a}.lg.alarm .m{color:#ff8e9c;font-weight:700}.lg.info .m{color:#b9cbe6}
+
+/* --- Design Office --- */
+.design .scroll{padding:6px 14px 14px;display:flex;flex-direction:column;gap:12px}
+.group{border:1px solid var(--line);border-radius:8px;background:rgba(4,10,22,.45)}
+.group h3{
+  margin:0;padding:8px 10px;font-size:11px;letter-spacing:.14em;color:var(--accent-2);
+  border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center
+}
+.group h3 em{font-style:normal;color:var(--dim);font-family:var(--mono)}
+.param{padding:8px 10px 6px}
+.param label{display:flex;justify-content:space-between;font-size:12px;color:var(--mute);margin-bottom:4px}
+.param label b{font-family:var(--mono);color:var(--ink);font-weight:600}
+.param select{width:100%;background:#071226;border:1px solid var(--line-hi);border-radius:6px;padding:6px}
+input[type=range].slim{width:100%;accent-color:var(--accent);height:22px}
+.outputs{display:grid;grid-template-columns:1fr auto;gap:5px 10px;font-size:12px;padding:10px}
+.outputs span{color:var(--mute)}
+.outputs b{font-family:var(--mono);font-weight:600;text-align:right}
+.outputs .sep{grid-column:1/-1;border-top:1px dashed var(--line);margin:3px 0}
+.ts{position:relative;aspect-ratio:16/11;margin:0 10px 10px;border-radius:6px;background:#061022;border:1px solid #13284a}
+.ts canvas{position:absolute;inset:0;width:100%;height:100%}
+.verdict{margin:10px 10px 0;padding:8px 10px;border-radius:6px;font-size:12px;font-weight:600}
+.verdict.ok{background:rgba(53,214,132,.1);color:#9ff0c4;border:1px solid #1f7a51}
+.verdict.bad{background:rgba(255,59,82,.12);color:#ffb3bd;border:1px solid #8a1e2c}
+.verdict.warn{background:rgba(255,178,31,.1);color:#ffd27a;border:1px solid #8a6214}
+.dclose{display:none}
+.mini-btn{border:1px solid var(--line-hi);background:#071226;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;font-family:var(--mono)}
+
+/* =====================================================================
+   4. CONSOLA DE CONTROL (deck inferior)
+   ===================================================================== */
+.deck{
+  position:fixed;left:0;right:0;bottom:0;z-index:40;
+  display:grid;grid-template-columns:auto minmax(220px,1fr) auto;gap:14px;align-items:center;
+  padding:12px 18px;padding-bottom:max(12px, env(safe-area-inset-bottom));
+  background:linear-gradient(180deg,#0b1a35,#060f20);
+  border-top:1px solid var(--line-hi);
+  box-shadow:0 -10px 30px rgba(0,0,0,.5);
+}
+.deck-row{display:flex;gap:8px;align-items:center}
+.sw{
+  position:relative;display:flex;align-items:center;gap:8px;
+  min-height:52px;padding:8px 14px;border-radius:9px;cursor:pointer;user-select:none;
+  background:linear-gradient(180deg,#132a50,#0b1b36);border:1px solid #23497e;
+  box-shadow:0 2px 0 #040a16, 0 1px 0 rgba(255,255,255,.06) inset;
+  font-family:var(--mono);font-weight:700;font-size:12px;letter-spacing:.08em;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+  transition:transform .06s, border-color .15s, background .15s;
+}
+.sw:active{transform:translateY(2px);box-shadow:0 0 0 #040a16}
+.sw .led{width:10px;height:10px;border-radius:50%;background:#1a2a44;box-shadow:0 0 0 2px #071226;flex:none}
+.sw .num{font-size:10px;color:var(--dim);border:1px solid #23497e;border-radius:4px;padding:1px 5px}
+.sw[aria-pressed="true"]{border-color:var(--accent);background:linear-gradient(180deg,#123c6e,#0b2347)}
+.sw[aria-pressed="true"] .led{background:var(--accent);box-shadow:0 0 0 2px #071226,0 0 10px var(--accent)}
+.sw.next{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{border-color:var(--accent-2);box-shadow:0 0 0 3px rgba(62,166,255,.25),0 2px 0 #040a16}}
+#btnAB[aria-pressed="true"]{border-color:var(--ab);background:linear-gradient(180deg,#4a2406,#2a1405)}
+#btnAB[aria-pressed="true"] .led{background:var(--ab);box-shadow:0 0 0 2px #071226,0 0 10px var(--ab)}
+#btnFADEC[aria-pressed="true"] .led{background:var(--ok);box-shadow:0 0 0 2px #071226,0 0 10px var(--ok)}
+#btnFADEC[aria-pressed="false"]{
+  border-color:#8a6214;
+  background:repeating-linear-gradient(135deg,#2a1d05 0 8px,#1a1203 8px 16px);
+  color:#ffd27a
+}
+.sw.ghost{background:#071226}
+.throttle{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center}
+.throttle label{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--mute);font-weight:700}
+.throttle output{font-family:var(--mono);font-weight:700;font-size:15px;min-width:64px;text-align:right;color:var(--accent-2)}
+.throttle output.ab{color:var(--ab)}
+/* slider del acelerador grande y táctil */
+#throttle{-webkit-appearance:none;appearance:none;width:100%;height:44px;background:transparent;cursor:pointer;touch-action:none}
+#throttle::-webkit-slider-runnable-track{
+  height:14px;border-radius:8px;border:1px solid #23497e;
+  background:linear-gradient(90deg,#0b2347 0%,#1a5aa0 var(--p,0%),#071226 var(--p,0%))
+}
+#throttle::-moz-range-track{height:14px;border-radius:8px;border:1px solid #23497e;background:#071226}
+#throttle::-moz-range-progress{height:14px;border-radius:8px;background:#1a5aa0}
+#throttle::-webkit-slider-thumb{
+  -webkit-appearance:none;width:30px;height:40px;margin-top:-14px;border-radius:7px;
+  background:linear-gradient(180deg,#dfe8f5,#8ea4c4);border:2px solid #0a1428;
+  box-shadow:0 3px 8px rgba(0,0,0,.6), 0 0 0 1px #6c84a8 inset
+}
+#throttle::-moz-range-thumb{width:28px;height:38px;border-radius:7px;background:linear-gradient(180deg,#dfe8f5,#8ea4c4);border:2px solid #0a1428}
+.thr-scale{grid-column:2;display:flex;justify-content:space-between;font-family:var(--mono);font-size:9.5px;color:var(--dim);margin-top:-8px;padding:0 6px}
+#throttle:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+
+/* =====================================================================
+   5. RESPONSIVO — móvil vertical con controles bajo los pulgares
+   ===================================================================== */
+@media (max-width:1180px){
+  .layout{grid-template-columns:minmax(280px,340px) minmax(0,1fr)}
+  #btnDesign{display:inline-block}
+  .design{
+    position:fixed;top:0;right:0;bottom:0;z-index:60;width:min(400px,100vw);
+    transform:translateX(105%);transition:transform .25s ease;
+    border-radius:0;overflow:auto;padding-top:env(safe-area-inset-top);
+  }
+  .design.open{transform:none}
+  .dclose{display:inline-block}
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:55;display:none}
+  .scrim.show{display:block}
+}
+@media (max-width:820px){
+  body{font-size:13px}
+  .layout{grid-template-columns:1fr;padding:10px;gap:10px;padding-bottom:calc(var(--deck-h) + 12px)}
+  .col{gap:10px}
+  .gauges{gap:8px;padding:8px}
+  .engine-wrap{height:auto;aspect-ratio:16/10}
+  .annun{grid-template-columns:repeat(4,1fr);padding:8px;gap:5px}
+  .lamp{font-size:9px;min-height:32px;padding:6px 2px}
+  .log{max-height:160px}
+  .brand small{display:none}
+  .brand h1{font-size:13px}
+  .topbar{gap:8px;padding:8px 10px}
+  .tbtn{padding:6px 8px;font-size:11px}
+  .deck{grid-template-columns:1fr;gap:6px;padding:8px 10px;padding-bottom:max(10px, env(safe-area-inset-bottom))}
+  .deck-row.seq .sw,.deck-row.aux .sw{flex:1;justify-content:center;min-height:50px;padding:6px 8px;font-size:11px}
+  .sw .num{display:none}
+  .throttle{grid-template-columns:auto 1fr auto;gap:8px}
+  .thr-scale{display:none}
+  #throttle{height:48px}
+  .hint{font-size:11.5px;bottom:8px;left:8px;right:8px;padding:6px 9px}
+}
+@media (prefers-reduced-motion:reduce){
+  .sw.next,.lamp.alarm,.pill.alarm{animation:none}
+}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* =====================================================================
+   6. PUNTOS DE INFORMACIÓN (modo de capacitación)
+   ===================================================================== */
+.ib{
+  display:none;position:absolute;top:6px;right:6px;z-index:5;
+  width:20px;height:20px;border-radius:50%;padding:0;cursor:pointer;
+  font:italic 700 12px/18px Georgia,"Times New Roman",serif;text-align:center;
+  color:#061022;background:var(--accent-2);border:1px solid #d6ecff;
+  box-shadow:0 0 0 3px rgba(62,166,255,.18);
+  -webkit-tap-highlight-color:transparent;
+}
+body.info-on .ib{display:inline-block}
+.ib:hover,.ib:focus-visible{background:#fff;outline:none;box-shadow:0 0 0 4px rgba(124,196,255,.45)}
+.ib.inl{position:static;width:16px;height:16px;font-size:10.5px;line-height:14px;vertical-align:middle;margin-left:5px;box-shadow:none}
+.card-h .ib{position:static;width:18px;height:18px;line-height:16px;font-size:11px;box-shadow:none;margin-left:6px;vertical-align:middle}
+.ts .ib{top:6px;right:6px}
+.swrap{position:relative;display:flex}
+.swrap > .ib{top:-8px;right:-6px}
+.hots{position:absolute;inset:0;pointer-events:none;display:none}
+body.info-on .hots{display:block}
+.hot{
+  position:absolute;pointer-events:auto;transform:translate(-50%,-50%);
+  display:flex;align-items:center;gap:6px;padding:3px 9px 3px 3px;border-radius:999px;cursor:pointer;
+  background:rgba(5,12,26,.84);border:1px solid var(--accent);color:var(--ink);
+  font:700 10.5px var(--mono);letter-spacing:.04em;white-space:nowrap;
+  -webkit-tap-highlight-color:transparent;
+}
+.hot i{width:18px;height:18px;border-radius:50%;background:var(--accent-2);color:#061022;font:italic 700 11px/18px Georgia,serif;text-align:center;flex:none}
+.hot::after{content:"";position:absolute;inset:-4px;border-radius:999px;border:1px solid rgba(124,196,255,.55);animation:ring 2.4s ease-out infinite;pointer-events:none}
+@keyframes ring{0%{opacity:.9;transform:scale(.92)}100%{opacity:0;transform:scale(1.3)}}
+.hot:hover,.hot:focus-visible{border-color:#fff;outline:none;background:rgba(16,36,74,.96)}
+button.lamp{appearance:none;width:100%;cursor:help}
+button.lamp:focus-visible{outline:2px solid var(--accent-2);outline-offset:1px}
+.lamp.mini{display:inline-flex;min-height:0;padding:2px 7px;font-size:9.5px;width:auto;vertical-align:middle;animation:none}
+
+/* Ficha emergente */
+.pop{
+  position:fixed;z-index:80;width:min(390px,calc(100vw - 24px));max-height:min(72vh,600px);overflow:auto;
+  background:linear-gradient(180deg,#10244a,#0a1730);border:1px solid var(--accent);border-radius:12px;
+  box-shadow:0 18px 50px rgba(0,0,0,.65);color:var(--ink);overscroll-behavior:contain;
+}
+.pop[hidden]{display:none}
+.pop-h{position:sticky;top:0;z-index:1;display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:12px 14px 10px;background:#10244a;border-bottom:1px solid var(--line)}
+.pop-tag{grid-column:1;font:700 10px var(--mono);letter-spacing:.14em;color:var(--accent-2);text-transform:uppercase}
+.pop-h h4{grid-column:1;margin:0;font-size:15px;line-height:1.25}
+.pop-x{grid-column:2;grid-row:1/3;align-self:start;width:32px;height:32px;border-radius:8px;border:1px solid var(--line-hi);background:#071226;cursor:pointer;font-size:18px;line-height:1}
+.pop-x:hover{border-color:var(--accent)}
+.pop-b{padding:8px 14px 4px;font-size:13px;line-height:1.5}
+.pop-b h5{margin:10px 0 3px;font:700 10.5px var(--mono);letter-spacing:.12em;color:var(--mute);text-transform:uppercase}
+.pop-b p{margin:0 0 6px}
+.pop-b ul,.pop-b ol{margin:2px 0 6px;padding-left:18px}
+.pop-b li{margin:2px 0}
+.pop-b b{color:#fff}
+.pop-b .f{display:block;margin:4px 0 6px;padding:6px 8px;border-radius:6px;background:#061022;border:1px solid #17305a;font:600 12px var(--mono);overflow-x:auto;white-space:nowrap;color:#bfe0ff}
+.pop-b .note{margin-top:8px;padding:6px 8px;border-left:3px solid var(--warn);background:rgba(255,178,31,.07);font-size:12px;color:#e9d7ad}
+.pop-b .tip{margin-top:8px;padding:6px 8px;border-left:3px solid var(--ok);background:rgba(53,214,132,.07);font-size:12px;color:#c6f2da}
+.pop-live{margin:8px 14px 14px;border:1px solid #1f7a51;border-radius:8px;background:rgba(53,214,132,.06)}
+.pop-live[hidden]{display:none}
+.pop-live .lh{padding:6px 10px;font:700 10px var(--mono);letter-spacing:.14em;color:var(--ok);border-bottom:1px solid rgba(31,122,81,.5)}
+.pop-live dl{display:grid;grid-template-columns:1fr auto;gap:3px 12px;margin:0;padding:8px 10px;font-size:12px}
+.pop-live dt{color:var(--mute)}
+.pop-live dd{margin:0;font-family:var(--mono);font-weight:600;text-align:right}
+
+@media (max-width:820px){
+  .brand > div{display:none}
+  .topbar{flex-wrap:wrap;row-gap:6px}
+  .hot span{display:none}
+  .hot{padding:3px}
+  .pop{left:8px !important;right:8px;top:auto !important;bottom:calc(var(--deck-h) + 8px);width:auto;max-height:58vh}
+  .deck-row.seq .swrap,.deck-row.aux .swrap{flex:1}
+  .swrap .sw{flex:1}
+}
+</style>
+</head>
+<body>
+
+<!-- ===================== BARRA SUPERIOR ===================== -->
+<header class="topbar">
+  <div class="brand">
+    <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="14.5" fill="none" stroke="#3ea6ff" stroke-width="1.5"/>
+      <g fill="#7cc4ff">
+        <path d="M16 16 L16 3.5 Q20 8 16 16Z"/><path d="M16 16 L28.5 16 Q24 20 16 16Z"/>
+        <path d="M16 16 L16 28.5 Q12 24 16 16Z"/><path d="M16 16 L3.5 16 Q8 12 16 16Z"/>
+      </g>
+      <circle cx="16" cy="16" r="3" fill="#050b17" stroke="#3ea6ff"/>
+    </svg>
+    <div>
+      <h1>JET TEST CELL</h1>
+      <small>SIMULADOR DE TURBORREACTOR · CICLO BRAYTON 0D</small>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <span class="pill" id="statusPill" role="status" aria-live="polite">APAGADO</span>
+  <button class="tbtn" id="btnInfo" aria-pressed="true" title="Mostrar u ocultar los puntos de información (H)">ⓘ INFO</button>
+  <button class="tbtn" id="btnGuide" data-info="guia" title="Guía de operación">GUÍA</button>
+  <button class="tbtn" id="btnUnits" title="Cambiar unidades: SI / imperiales">SI</button>
+  <button class="tbtn" id="btnAudio" aria-pressed="false" title="Sonido (M)">SONIDO: NO</button>
+  <button class="tbtn" id="btnDesign" aria-controls="design">DISEÑO</button>
+</header>
+
+<main class="layout">
+  <!-- ===================== COLUMNA IZQ: INSTRUMENTOS ===================== -->
+  <section class="col" aria-label="Instrumentación">
+    <div class="card screws">
+      <div class="card-h"><span>Instrumentación <b>en vivo</b></span><span id="clock">T+00:00</span></div>
+      <div class="gauges">
+        <div class="gauge"><canvas id="gN1" aria-label="N1"></canvas><button type="button" class="ib" data-info="n1" aria-label="Información: N1">i</button></div>
+        <div class="gauge"><canvas id="gEGT" aria-label="EGT"></canvas><button type="button" class="ib" data-info="egt" aria-label="Información: EGT">i</button></div>
+        <div class="gauge"><canvas id="gThrust" aria-label="Empuje"></canvas><button type="button" class="ib" data-info="thrust" aria-label="Información: empuje">i</button></div>
+        <div class="gauge"><canvas id="gFuel" aria-label="Flujo de combustible"></canvas><button type="button" class="ib" data-info="fuel" aria-label="Información: flujo de combustible">i</button></div>
+      </div>
+      <div class="integrity">
+        <div class="row"><span>INTEGRIDAD DE TURBINA<button type="button" class="ib inl" data-info="integridad" aria-label="Información: integridad">i</button></span><b id="intVal">100 %</b></div>
+        <div class="bar" id="intBar"><i></i></div>
+      </div>
+      <div class="kv">
+        <span>Relación de combustible r<button type="button" class="ib inl" data-info="r" aria-label="Información: relación r">i</button></span><b id="kvR">—</b>
+        <span>Margen de surge disponible<button type="button" class="ib inl" data-info="sm" aria-label="Información: margen de surge">i</button></span><b id="kvSM">—</b>
+        <span>Surges registrados</span><b id="kvSurge">0</b>
+        <span>Postquemador<button type="button" class="ib inl" data-info="ab_btn" aria-label="Información: postquemador">i</button></span><b id="kvAB">APAGADO</b>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== COLUMNA CENTRAL: MOTOR + ANUNCIADORES ===================== -->
+  <section class="col" aria-label="Celda de pruebas">
+    <div class="card screws">
+      <div class="card-h"><span>Celda de pruebas · <b>vista en corte</b><button type="button" class="ib" data-info="celda" aria-label="Información: celda de pruebas">i</button></span><span>ISA nivel del mar · 15 °C · 101.3 kPa</span></div>
+      <div class="engine-wrap">
+        <canvas id="engineCanvas" aria-label="Vista en corte del motor"></canvas>
+        <div class="hots" id="hots"></div>
+        <div class="hint" id="hint">Paso 1 · Activa el ARRANCADOR para girar el carrete</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><span>Panel de anunciadores<button type="button" class="ib" data-info="anunciadores" aria-label="Información: anunciadores">i</button></span><span>toca una lámpara</span></div>
+      <div class="annun" id="annun"></div>
+    </div>
+    <div class="card logcard">
+      <div class="card-h"><span>Bitácora de prueba<button type="button" class="ib" data-info="bitacora" aria-label="Información: bitácora">i</button></span><button class="mini-btn" id="btnClearLog">LIMPIAR</button></div>
+      <ol class="log" id="log" aria-live="polite"></ol>
+    </div>
+  </section>
+
+  <!-- ===================== COLUMNA DER: DESIGN OFFICE ===================== -->
+  <aside class="col card design" id="design" aria-label="Design Office">
+    <div class="card-h"><span>Oficina de diseño · <b>trayectoria de gases</b><button type="button" class="ib" data-info="disenio" aria-label="Información: oficina de diseño">i</button></span>
+      <span style="display:flex;gap:6px">
+        <button class="mini-btn" id="btnDefaults">VALORES BASE</button>
+        <button class="mini-btn dclose" id="btnDesignClose">CERRAR</button>
+      </span>
+    </div>
+    <div class="scroll" id="designScroll">
+      <!-- grupos de parámetros generados por JS -->
+      <div id="paramGroups"></div>
+      <div class="group">
+        <h3>PUNTO DE DISEÑO <em>100 % N1 · estático</em><button type="button" class="ib inl" data-info="salidas" aria-label="Información: resultados">i</button></h3>
+        <div id="verdict" class="verdict ok">Ciclo válido</div>
+        <div class="outputs" id="outputs"></div>
+        <div class="ts"><canvas id="tsCanvas" aria-label="Diagrama T-s"></canvas><button type="button" class="ib" data-info="ts" aria-label="Información: diagrama T-s">i</button></div>
+      </div>
+    </div>
+  </aside>
+</main>
+<div class="scrim" id="scrim"></div>
+
+<!-- ===================== CONSOLA DE CONTROL ===================== -->
+<footer class="deck" id="deck">
+  <div class="deck-row seq" role="group" aria-label="Secuencia de arranque">
+    <span class="swrap"><button class="sw" id="btnStarter" aria-pressed="false"><span class="led"></span><span class="num">1</span>ARRANCADOR</button><button type="button" class="ib" data-info="starter" aria-label="Información: arrancador">i</button></span>
+    <span class="swrap"><button class="sw" id="btnIgn" aria-pressed="false"><span class="led"></span><span class="num">2</span>IGNICIÓN</button><button type="button" class="ib" data-info="ign" aria-label="Información: ignición">i</button></span>
+    <span class="swrap"><button class="sw" id="btnFuel" aria-pressed="false"><span class="led"></span><span class="num">3</span>COMBUSTIBLE</button><button type="button" class="ib" data-info="fuel_btn" aria-label="Información: combustible">i</button></span>
+  </div>
+  <div>
+    <div class="throttle">
+      <label for="throttle">ACEL.<button type="button" class="ib inl" data-info="throttle" aria-label="Información: acelerador">i</button></label>
+      <input type="range" id="throttle" min="0" max="100" step="1" value="0" aria-label="Acelerador">
+      <output id="thrOut">RALENTÍ</output>
+    </div>
+    <div class="throttle"><span></span><div class="thr-scale"><span>RALENTÍ</span><span>25</span><span>50</span><span>75</span><span>MIL</span></div><span></span></div>
+  </div>
+  <div class="deck-row aux" role="group" aria-label="Sistemas">
+    <span class="swrap"><button class="sw" id="btnAB" aria-pressed="false"><span class="led"></span>POSTQUEMADOR</button><button type="button" class="ib" data-info="ab_btn" aria-label="Información: postquemador">i</button></span>
+    <span class="swrap"><button class="sw" id="btnFADEC" aria-pressed="true"><span class="led"></span>FADEC</button><button type="button" class="ib" data-info="fadec" aria-label="Información: FADEC">i</button></span>
+    <span class="swrap"><button class="sw ghost" id="btnReset"><span class="led"></span>REINICIAR</button><button type="button" class="ib" data-info="reset" aria-label="Información: reiniciar">i</button></span>
+  </div>
+</footer>
+
+<!-- Ficha emergente de información -->
+<div class="pop" id="pop" role="dialog" aria-labelledby="popT" hidden>
+  <div class="pop-h">
+    <span class="pop-tag" id="popTag">Información</span>
+    <h4 id="popT"></h4>
+    <button type="button" class="pop-x" id="popX" aria-label="Cerrar ficha">×</button>
+  </div>
+  <div class="pop-b" id="popB"></div>
+  <div class="pop-live" id="popLive" hidden></div>
+</div>
+
+<script>
+"use strict";
+/* =======================================================================
+   UTILIDADES
+   ======================================================================= */
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const lerp  = (a, b, t) => a + (b - a) * t;
+const K2C   = k => k - 273.15;
+const N_TO_LBF = 0.224809;           // 1 N = 0.224809 lbf
+const KG_TO_LB = 2.20462;
+const TSFC_SI_TO_IMP = 3600 * 9.80665; // kg/(N·s) → lb/(lbf·h)
+
+/* Formato numérico de México (es-MX): separador de miles «,» y decimal «.» → 1,234.5 */
+const NF_CACHE = {};
+function nf(v, d = 0) {
+  if (!isFinite(v)) return '—';
+  const f = NF_CACHE[d] || (NF_CACHE[d] = new Intl.NumberFormat('es-MX', { minimumFractionDigits: d, maximumFractionDigits: d }));
+  return f.format(Math.abs(v) < Math.pow(10, -d) / 2 ? 0 : v);
+}
+
+// ==== PHYSICS START ====
+/* =======================================================================
+   MODELO TERMODINÁMICO — CICLO BRAYTON PARAMÉTRICO (0D)
+   Estaciones: 0 ambiente · 2 entrada compresor · 3 salida compresor ·
+               4 entrada turbina (TIT) · 5 salida turbina (EGT) · 7 AB · 9 tobera
+   ======================================================================= */
+const ATM = { T0: 288.15, P0: 101325 };                  // ISA nivel del mar, celda estática
+const GAS = { cpc: 1005, gc: 1.4, cph: 1148, gh: 1.333, LHV: 43e6 };
+GAS.kc = (GAS.gc - 1) / GAS.gc;
+GAS.kh = (GAS.gh - 1) / GAS.gh;
+GAS.Rh = GAS.cph * GAS.kh;
+
+/* Parámetros de la dinámica del carrete y de la lógica de control */
+const P = {
+  nIdle: 0.62,        // ralentí (fracción de N1)
+  nLight: 0.12,       // N1 mínimo para light-off
+  nSelf: 0.45,        // N1 de autosostenimiento
+  starterCut: 0.55,   // desacople automático del starter
+  nMaxManual: 1.06,   // N1 alcanzable sin FADEC (sobrevelocidad)
+  leanLimit: 0.38,    // límite de extinción por mezcla pobre (r)
+  timeScale: 3.5,     // compresión temporal del arranque (jugabilidad)
+  TITmat: 1850,       // límite metalúrgico de TIT (K)
+  nStep: 0.005,       // resolución de tablas
+  nTab: 1.25
+};
+
+/* Definición de la Design Office */
+const DESIGN_PARAMS = [
+  { key:'mdot', g:'Admisión', st:'0→2', label:'Flujo másico de diseño ṁ', min:20, max:200, step:1, val:75, fmt:v=>nf(v)+' kg/s',
+    info:'<p>Masa de aire que atraviesa el motor por segundo en el punto de diseño (100 % N1). En un motor real la fija principalmente el diámetro de la primera etapa del compresor.</p><h5>Efecto</h5><p>El empuje escala casi en proporción directa: duplicar ṁ ≈ duplicar el empuje con el mismo TSFC. Fuera de diseño se modela <b>ṁ ∝ N^2.8</b>.</p>' },
+  { key:'inletRec', g:'Admisión', st:'0→2', label:'Recuperación de presión π_d', min:0.90, max:1.00, step:0.005, val:0.98, fmt:v=>nf(v,3),
+    info:'<p>π_d = P2 / P0: fracción de la presión total que conserva la admisión.</p><span class="f">P2 = P0 · π_d</span><h5>Efecto</h5><p>Pérdidas por fricción, separación de flujo o daños en el labio bajan P2 y con ella toda la presión del ciclo: menos empuje y más consumo. Valores reales en banco estático: 0.97 – 0.99.</p><p class="tip">En taller: abolladuras en el labio de admisión, sellos dañados o un filtro/rejilla sucio en celda reducen π_d.</p>' },
+  { key:'PR', g:'Compresor', st:'2→3', label:'Relación de presión π_c', min:3, max:40, step:0.5, val:20, fmt:v=>nf(v,1)+' : 1',
+    info:'<p>π_c = P3 / P2: relación de presión total del compresor.</p><span class="f">T3 = T2 · [1 + (π_c^0.286 − 1) / η_c]</span><h5>Efecto</h5><ul><li>Mayor π_c → mejor eficiencia térmica (menor TSFC) hasta un óptimo.</li><li>Pero sube T3, aumenta el trabajo del compresor y <b>baja el margen de surge</b> (SM ≈ 0.22 + 6.5 / π_c).</li></ul><p>Turborreactores militares típicos: 8 – 25.</p>' },
+  { key:'etaC', g:'Compresor', st:'2→3', label:'Eficiencia isentrópica η_c', min:0.70, max:0.93, step:0.005, val:0.86, fmt:v=>nf(v*100,1)+' %',
+    info:'<p>Relación entre el trabajo ideal (isentrópico) y el trabajo real de compresión.</p><h5>Efecto</h5><p>Un compresor sucio o erosionado pierde η_c: sube T3, la turbina debe extraer más trabajo y la <b>EGT aumenta</b> (pérdida de margen de EGT). Típico: 0.84 – 0.90.</p><p class="tip">El lavado de compresor recupera parte de la η_c perdida por suciedad; la erosión de álabes no se recupera sin reparación.</p>' },
+  { key:'TIT', g:'Cámara de combustión', st:'3→4', label:'Temperatura de entrada a turbina T4', min:1000, max:2000, step:10, val:1600, fmt:v=>nf(v)+' K',
+    info:'<p>Temperatura total a la entrada de la turbina (estación 4). Es el parámetro que más influye en el empuje específico.</p><h5>Límite</h5><p>Limitada por la metalurgia y el enfriamiento de álabes. En este simulador el límite del material es <b>1,850 K</b>: por encima, el FADEC limita N1 y sin FADEC hay fluencia (creep) que consume la vida de la turbina.</p><p class="note">La TIT no se mide directamente en servicio: se infiere a partir de la EGT.</p>' },
+  { key:'etaB', g:'Cámara de combustión', st:'3→4', label:'Eficiencia de combustión η_b', min:0.90, max:1.00, step:0.005, val:0.98, fmt:v=>nf(v*100,1)+' %',
+    info:'<p>Fracción de la energía química del combustible (PCI 43 MJ/kg) que realmente se libera como calor.</p><span class="f">f = (cp_h·T4 − cp_c·T3) / (η_b·PCI − cp_h·T4)</span><p>Valores reales ≥ 0.98. Inyectores coquizados o una atomización deficiente la reducen: se necesita más combustible para alcanzar la misma T4.</p>' },
+  { key:'dPb', g:'Cámara de combustión', st:'3→4', label:'Pérdida de presión Δp/p', min:0.01, max:0.10, step:0.005, val:0.05, fmt:v=>nf(v*100,1)+' %',
+    info:'<p>Caída de presión total en la cámara.</p><span class="f">P4 = P3 · (1 − Δp/p)</span><p>Es necesaria para la mezcla y el enfriamiento del liner, pero reduce la presión disponible para la expansión en turbina y tobera. Típico: 3 – 6 %.</p>' },
+  { key:'etaT', g:'Turbina', st:'4→5', label:'Eficiencia isentrópica η_t', min:0.75, max:0.95, step:0.005, val:0.90, fmt:v=>nf(v*100,1)+' %',
+    info:'<p>Eficiencia de expansión de la turbina.</p><h5>Efecto</h5><p>Si baja (mayor holgura en las puntas por desgaste, álabes dañados), la turbina necesita una caída de presión mayor para mover al compresor: queda menos presión para la tobera, <b>baja el empuje y sube el consumo</b>. Típico: 0.88 – 0.92.</p>' },
+  { key:'etaN', g:'Tobera y postquemador', st:'5→9', label:'Eficiencia de tobera η_n', min:0.90, max:1.00, step:0.005, val:0.97, fmt:v=>nf(v*100,1)+' %',
+    info:'<p>Fracción de la energía cinética ideal del chorro que realmente se obtiene. Pérdidas por fricción y por desalineación del flujo. Típico: 0.95 – 0.99.</p>' },
+  { key:'Tab', g:'Tobera y postquemador', st:'5→7', label:'Temperatura de postquemador T7', min:1500, max:2300, step:10, val:2000, fmt:v=>nf(v)+' K',
+    info:'<p>Temperatura objetivo del postquemador (estación 7).</p><h5>Efecto</h5><p>Más alta → más empuje con postquemador, pero el TSFC crece mucho porque el combustible se quema a baja presión (ciclo de baja eficiencia). Típico: 1,900 – 2,200 K.</p>' },
+];
+const NOZ_TYPES = { conv:'Convergente (choked)', cd:'Convergente-divergente (adaptada)' };
+
+function defaultDesign() {
+  const d = { nozType: 'conv' };
+  DESIGN_PARAMS.forEach(p => d[p.key] = p.val);
+  return d;
+}
+
+/* Velocidad efectiva de salida (incluye término de presión en tobera convergente bloqueada) */
+function nozzleVeff(Tt, Pt, eta, type) {
+  const NPR = Pt / ATM.P0;
+  if (NPR <= 1) return 0;
+  const crit = Math.pow((GAS.gh + 1) / 2, GAS.gh / (GAS.gh - 1)); // ≈1.85
+  if (type === 'cd' || NPR <= crit) {
+    return Math.sqrt(2 * eta * GAS.cph * Tt * (1 - Math.pow(1 / NPR, GAS.kh)));
+  }
+  const T9 = Tt * 2 / (GAS.gh + 1);
+  const V9 = Math.sqrt(eta * GAS.gh * GAS.Rh * T9);
+  const P9 = Pt / crit;
+  const rho = P9 / (GAS.Rh * T9);
+  return V9 + (P9 - ATM.P0) / (rho * V9);          // F/ṁ = V9 + A9(P9−P0)/ṁ
+}
+
+/* Ciclo a una velocidad relativa n (fuera de diseño mediante leyes de escalado simples) */
+function cycle(d, n) {
+  const nn   = Math.max(n, 0.02);
+  const mdot = d.mdot * Math.pow(nn, 2.8);                 // ṁ ∝ N^2.8
+  const PR   = 1 + (d.PR - 1) * Math.pow(nn, 2.2);         // línea de operación
+  const T4   = d.TIT * (0.45 + 0.55 * Math.pow(Math.min(nn, 1), 3)) * (1 + 0.5 * Math.max(0, nn - 1)); // programación de T4
+  const T2 = ATM.T0, P2 = ATM.P0 * d.inletRec;
+  const T3 = T2 * (1 + (Math.pow(PR, GAS.kc) - 1) / d.etaC);
+  const P3 = P2 * PR;
+  const Wc = GAS.cpc * (T3 - T2);                          // trabajo específico del compresor
+  const out = { n, mdot, PR, T2, P2, T3, P3, T4, Wc, valid: false };
+
+  const f = (GAS.cph * T4 - GAS.cpc * T3) / (d.etaB * GAS.LHV - GAS.cph * T4);
+  if (!(f > 0)) { out.reason = 'T4 ≤ T3: la cámara no aporta calor'; return out; }
+  const P4  = P3 * (1 - d.dPb);
+  const dTt = Wc / (0.99 * (1 + f) * GAS.cph);             // balance turbina–compresor (η_m 0.99)
+  const T5  = T4 - dTt;
+  const T5s = T4 - dTt / d.etaT;
+  Object.assign(out, { f, P4, T5 });
+  if (T5s <= 200) { out.reason = 'La turbina no puede accionar al compresor'; return out; }
+  const P5  = P4 * Math.pow(T5s / T4, 1 / GAS.kh);
+  const NPR = P5 / ATM.P0;
+  Object.assign(out, { P5, NPR });
+  if (NPR <= 1.02) { out.reason = 'NPR < 1: la tobera no tiene salto de presión útil'; return out; }
+
+  const V  = nozzleVeff(T5, P5, d.etaN, d.nozType);
+  const F  = mdot * (1 + f) * V;
+  const wf = f * mdot;
+
+  // Postquemador: recalentamiento hasta T7 con pérdida de presión del 5 %
+  const Tab = Math.max(d.Tab, T5 + 100);
+  const fab = (1 + f) * GAS.cph * (Tab - T5) / (0.92 * GAS.LHV - GAS.cph * Tab);
+  const P7  = P5 * 0.95;
+  const Vab = nozzleVeff(Tab, P7, d.etaN, d.nozType);
+  const Fab = mdot * (1 + f + fab) * Vab;
+  Object.assign(out, { valid: true, V, F, wf, Tab, fab, P7, Vab, Fab, wfab: fab * mdot });
+  return out;
+}
+
+/* Tablas precalculadas F(n), ṁf(n), EGT(n)… para la simulación en tiempo real */
+function buildTables(d) {
+  const N = Math.round(P.nTab / P.nStep) + 1;
+  const t = { F:new Float64Array(N), wf:new Float64Array(N), egt:new Float64Array(N),
+              Fab:new Float64Array(N), wfab:new Float64Array(N), T4:new Float64Array(N) };
+  let first = -1;
+  for (let i = 0; i < N; i++) {
+    const c = cycle(d, i * P.nStep);
+    t.T4[i] = c.T4;
+    if (c.valid) {
+      if (first < 0) first = i;
+      t.F[i] = c.F; t.wf[i] = c.wf; t.egt[i] = c.T5; t.Fab[i] = c.Fab; t.wfab[i] = c.wfab;
+    } else if (first >= 0) {           // degenerado por encima: arrastrar último válido
+      t.F[i] = t.F[i-1]; t.wf[i] = t.wf[i-1]; t.egt[i] = t.egt[i-1]; t.Fab[i] = t.Fab[i-1]; t.wfab[i] = t.wfab[i-1];
+    }
+  }
+  if (first < 0) {                     // ciclo totalmente inviable
+    for (let i = 0; i < N; i++) { const n = i * P.nStep; t.F[i] = 0; t.wf[i] = 1e-4 * n * n + 1e-6; t.egt[i] = ATM.T0 + 500 * n; t.Fab[i] = 0; t.wfab[i] = 0; }
+  } else {                             // extrapolación a baja velocidad
+    for (let i = 0; i < first; i++) {
+      const k = i / first;
+      t.F[i] = t.F[first] * k * k * k;
+      t.wf[i] = t.wf[first] * Math.max(k, 0.05) ** 2;
+      t.egt[i] = ATM.T0 + (t.egt[first] - ATM.T0) * k;
+      t.Fab[i] = t.F[i]; t.wfab[i] = 0;
+    }
+  }
+  t.design  = cycle(d, 1);
+  t.valid   = t.design.valid && first >= 0 && first * P.nStep <= P.nIdle;
+  t.redline = (t.design.valid ? t.design.T5 : 1100) + 40;          // EGT redline (K)
+  t.SM      = clamp(0.22 + 6.5 / d.PR, 0.3, 1.2);                   // margen de surge
+  t.nT4lim  = 1;                                                    // límite FADEC por TIT material
+  for (let n = 1; n >= P.nIdle; n -= P.nStep) {
+    if (d.TIT * (0.45 + 0.55 * n ** 3) <= P.TITmat) { t.nT4lim = n; break; }
+  }
+  return t;
+}
+
+function look(arr, n) {
+  const x = clamp(n, 0, P.nTab) / P.nStep;
+  const i = Math.floor(x), j = Math.min(i + 1, arr.length - 1);
+  return lerp(arr[i], arr[j], x - i);
+}
+
+/* =======================================================================
+   ESTADO Y DINÁMICA DEL MOTOR
+   ======================================================================= */
+const S = {};
+function resetState() {
+  Object.assign(S, {
+    t: 0, n: 0, egt: ATM.T0, wf: 0, wfTot: 0, F: 0, tsfc: 0, r: 0, thr: S.thr || 0,
+    starter: false, ign: false, fuel: false, ab: false, fadec: S.fadec === undefined ? true : S.fadec,
+    lit: false, running: false, abLit: false, abLevel: 0, abTimer: 0, abPulse: 0,
+    damage: 0, failed: null, puddle: 0, hung: 0,
+    surgeCD: 0, surgeFlash: 0, surgeRecov: 0, surgeCount: 0, lastSurge: -99,
+    flameoutT: 0, shake: 0, limiting: false, overspeed: false, overtemp: false, creep: false,
+    msgInhibit: false, msgWet: false, msgHung: false
+  });
+}
+
+/* Ganchos que la UI conecta (audio, bitácora, interruptores) */
+const H = { log(){}, bang(){}, whoomp(){}, setSwitch(){} };
+
+let design = defaultDesign();
+let T = buildTables(design);
+function setDesign(d) { design = d; T = buildTables(d); }
+
+function lightOff() {
+  S.lit = true; S.hung = 0; S.msgWet = false;
+  if (S.puddle > 2) {
+    const spike = Math.min(450, S.puddle * 110);
+    S.egt += spike; S.shake = 0.6; H.bang(0.7);
+    H.log(`ARRANQUE CALIENTE (hot start): combustible acumulado ${nf(S.puddle, 1)} s — pico de EGT +${nf(spike)} K`, 'alarm');
+  } else {
+    H.log(S.n >= P.nSelf ? 'Reencendido (relight) exitoso' : 'Encendido (light-off): combustión establecida', 'ok');
+  }
+  S.puddle = 0;
+  H.whoomp(0.6);
+}
+function extinguish(msg, lvl, flash) {
+  S.lit = false; S.running = false; S.abLit = false; S.abTimer = 0;
+  if (flash) S.flameoutT = 2.5;
+  if (msg) H.log(msg, lvl);
+}
+function abortStart(reason) {
+  S.fuel = false; H.setSwitch('fuel', false);
+  extinguish('FADEC: ARRANQUE ABORTADO — ' + reason, 'warn', false);
+}
+function fail(msg) {
+  S.failed = msg; S.shake = 1.6;
+  extinguish(null);
+  if (S.starter) { S.starter = false; H.setSwitch('starter', false); }
+  H.bang(1.6);
+  H.log('FALLA DE MOTOR: ' + msg, 'alarm');
+}
+function surge() {
+  S.surgeCD = 0.35; S.surgeFlash = 1; S.shake = 1; S.surgeCount++; S.lastSurge = S.t;
+  S.n = Math.max(0, S.n - 0.03);
+  S.egt += 110;
+  S.damage += S.fadec ? 1.5 : 2.5;
+  if (S.fadec) S.surgeRecov = 0.6;
+  H.bang(1);
+  H.log(S.fadec ? 'PÉRDIDA DE COMPRESOR (SURGE) — FADEC aplicando recuperación' : 'PÉRDIDA DE COMPRESOR (SURGE) — flujo invertido en el compresor', 'alarm');
+}
+
+/* Paso de integración (Euler explícito, sub-pasos desde el bucle principal) */
+function step(dt) {
+  S.t += dt;
+  S.surgeCD    = Math.max(0, S.surgeCD - dt);
+  S.surgeFlash = Math.max(0, S.surgeFlash - dt * 2.2);
+  S.surgeRecov = Math.max(0, S.surgeRecov - dt);
+  S.abPulse    = Math.max(0, S.abPulse - dt * 0.8);
+  S.flameoutT  = Math.max(0, S.flameoutT - dt);
+  S.shake     *= Math.exp(-dt * 7);
+
+  // Desacople automático del starter
+  if (S.starter && (S.n >= P.starterCut || S.failed)) {
+    S.starter = false; H.setSwitch('starter', false);
+    if (!S.failed) H.log('Arrancador desacoplado automáticamente (N1 ≥ 55 %)', 'info');
+  }
+
+  const drag     = S.n > 0 ? (0.07 * S.n + 0.008) * (S.failed ? 5 : 1) : 0;   // fricción + bombeo
+  const starterT = S.starter ? 0.05 * Math.max(0, 1 - S.n / 0.6) : 0;         // par del starter
+
+  // Disponibilidad de combustible (FADEC inhibe por debajo de 12 % N1)
+  let fuelFlow = S.fuel && !S.failed;
+  if (fuelFlow && S.fadec && !S.lit && S.n < P.nLight) {
+    fuelFlow = false;
+    if (!S.msgInhibit) { H.log('FADEC: inyección inhibida hasta N1 ≥ 12 %', 'info'); S.msgInhibit = true; }
+  }
+  if (!S.fuel) S.msgInhibit = false;
+
+  // Light-off / combustible sin encender
+  if (!S.lit && fuelFlow) {
+    if (S.ign && S.n >= P.nLight) lightOff();
+    else {
+      S.puddle += dt;
+      if (S.puddle > 1.5 && !S.msgWet) {
+        H.log(S.n < P.nLight ? 'Combustible con N1 < 12 %: aire insuficiente, combustible acumulándose'
+                             : 'Combustible sin ignición: arranque húmedo (wet start)', 'warn');
+        S.msgWet = true;
+      }
+    }
+  } else if (!S.lit) {
+    S.puddle = Math.max(0, S.puddle - dt * 0.4);
+    if (S.puddle === 0) S.msgWet = false;
+  }
+  if (S.lit && !fuelFlow) extinguish('Corte de combustible: motor apagándose', 'info', false);
+
+  let dn, egtT, tau;
+  if (!S.lit) {
+    /* --- Régimen apagado / motoreo --- */
+    dn = (starterT - drag) * P.timeScale;
+    S.wf = 0; S.r = 0; S.hung = 0; S.abLit = false;
+    egtT = ATM.T0; tau = S.n > 0.05 ? 4 : 8;
+  } else if (!S.running) {
+    /* --- Régimen de arranque (light-off → ralentí) --- */
+    const comb = (T.valid && S.n > 0.23) ? 0.18 * (S.n - 0.23) : 0;
+    dn = (starterT + comb - drag) * P.timeScale;
+    if (!S.starter && S.n < P.nSelf) S.hung += dt; else S.hung = Math.max(0, S.hung - dt * 1.5);
+    if (S.hung > 1.2 && !S.msgHung) { H.log('ARRANQUE COLGADO (hung start): N1 estancado sin asistencia del arrancador', 'alarm'); S.msgHung = true; }
+    const peak  = ATM.T0 + 250 + 360 * clamp((S.n - 0.12) / 0.25, 0, 1);
+    const idleE = look(T.egt, P.nIdle);
+    egtT = lerp(peak, idleE, clamp((S.n - 0.40) / (P.nIdle - 0.40), 0, 1)) + S.hung * 45 + (S.starter ? 0 : 40);
+    tau = 0.9;
+    S.wf = look(T.wf, P.nIdle) * lerp(0.5, 1, clamp(S.n / P.nIdle, 0, 1));
+    S.r = 1; S.abLit = false;
+    if (S.fadec) {
+      if (S.egt > T.redline - 60) abortStart('EGT de arranque excesiva (arranque caliente)');
+      else if (S.hung > 2.5)      abortStart('arranque colgado');
+    }
+    if (S.lit && S.n < 0.08) extinguish('Apagado de llama (flameout): flujo de aire insuficiente para sostener la llama', 'warn', true);
+    if (S.lit && S.n >= P.nIdle - 0.004) {
+      S.running = true; S.msgHung = false; S.wf = look(T.wf, S.n);
+      H.log('Motor estabilizado en ralentí (IDLE)', 'ok');
+    }
+  } else {
+    /* --- Régimen en marcha --- */
+    const wss = Math.max(look(T.wf, S.n), 1e-6);   // combustible de estado estacionario a este N1
+    let wfc;
+    if (S.fadec) {
+      // FADEC: gobernador de N1 con programación de aceleración/deceleración y limitadores
+      const nReq = P.nIdle + (1 - P.nIdle) * S.thr;
+      const ncmd = Math.min(nReq, T.nT4lim);
+      let rc = 1 + 3.5 * (ncmd - S.n);
+      rc = clamp(rc, 0.62, 1 + 0.65 * T.SM);
+      const lim = T.redline - 25;
+      if (S.egt > lim) rc = Math.min(rc, 1 - (S.egt - lim) * 0.006);
+      if (S.surgeRecov > 0) rc = Math.min(rc, 0.8);
+      rc = Math.max(rc, 0.55);
+      wfc = wss * rc;
+      S.limiting = ncmd < nReq - 1e-4 || S.egt > lim;
+    } else {
+      // Manual: el acelerador abre la válvula directamente (sin protecciones)
+      wfc = look(T.wf, P.nIdle + (P.nMaxManual - P.nIdle) * S.thr);
+      S.limiting = false;
+    }
+    // dinámica de la válvula: FADEC dosifica rápido; en manual la unidad hidromecánica tiene más inercia
+    S.wf += (wfc - S.wf) * Math.min(1, dt / (S.fadec ? 0.12 : 0.7));
+    S.r = S.wf / wss;
+    dn = S.surgeCD > 0 ? -0.08 : 0.22 * Math.min(S.r - 1, 1.5) * (0.6 + 0.4 * S.n);
+
+    // Postquemador
+    const nAB = S.fadec ? 0.92 : 0.80;
+    if (S.ab) {
+      if (S.n >= nAB) {
+        if (!S.abLit) {
+          S.abTimer += dt;
+          if (S.abTimer > 0.4) {
+            S.abLit = true; S.abTimer = 0; H.whoomp(1.1);
+            H.log('Postquemador ENCENDIDO (reheat)', 'ok');
+            if (!S.fadec) { S.abPulse = 0.45; H.log('Sin FADEC: tobera sin programar, pico de contrapresión en la turbina', 'warn'); }
+          }
+        }
+      } else {
+        if (S.abLit) { S.abLit = false; H.log('Postquemador apagado: N1 por debajo del mínimo', 'warn'); }
+        S.abTimer = 0;
+      }
+    } else { S.abLit = false; S.abTimer = 0; }
+
+    // Surge (r supera la línea de surge) y flameout (r bajo límite pobre)
+    const SMeff = T.SM * (1 - S.damage / 200) - S.abPulse;
+    if (S.r > 1 + SMeff && S.surgeCD <= 0) surge();
+    if (S.r < P.leanLimit) extinguish('APAGADO DE LLAMA (flameout): extinción por mezcla pobre (lean blowout)', 'alarm', true);
+    else if (S.n < 0.40) { S.running = false; H.log('N1 por debajo de autosostenimiento', 'warn'); }
+
+    const egtSS = look(T.egt, S.n);
+    egtT = ATM.T0 + (egtSS - ATM.T0) * Math.pow(Math.max(S.r, 0.3), 0.55) + (S.abLit && !S.fadec ? 70 : 0);
+    tau = 0.6;
+  }
+
+  egtT += S.damage * 2.5;                                   // turbina dañada → más EGT
+  S.egt += (egtT - S.egt) * Math.min(1, dt / tau);
+  S.n = clamp(S.n + dn * dt, 0, 1.25);
+  S.abLevel += ((S.abLit ? 1 : 0) - S.abLevel) * Math.min(1, dt / 0.5);
+
+  // Acumulación de daño
+  S.overspeed = S.n > 1.05;
+  if (S.overspeed) S.damage += (S.n - 1.05) * dt * 40;
+  S.overtemp = S.egt > T.redline;
+  if (S.overtemp) S.damage += (S.egt - T.redline) * dt * 0.03;
+  if (S.lit) {
+    const t4 = look(T.T4, S.n);
+    S.creep = t4 > P.TITmat;
+    if (S.creep) S.damage += (t4 - P.TITmat) * dt * 0.004;
+  } else S.creep = false;
+  if (S.n > 1.16 && !S.failed) fail('rotura de disco de turbina por sobrevelocidad');
+  if (S.damage >= 100 && !S.failed) fail('álabes de turbina fracturados por sobretemperatura');
+  S.damage = Math.min(S.damage, 100);
+
+  // Empuje y consumo
+  const Fdry = look(T.F, S.n);
+  let F = S.lit ? (S.running ? Fdry * clamp(Math.pow(Math.max(S.r, 0.01), 0.3), 0.6, 1.25) : Fdry * 0.85) : Fdry * 0.03;
+  const health = 1 - S.damage / 250;
+  F *= health;
+  const Fwet = look(T.Fab, S.n) * health;
+  F += S.abLevel * Math.max(0, Fwet - F);
+  S.F = Math.max(0, F);
+  S.wfTot = S.wf + S.abLevel * look(T.wfab, S.n);
+  S.tsfc = S.F > 100 ? S.wfTot / S.F : 0;
+}
+resetState();
+// ==== PHYSICS END ====
+
+/* =======================================================================
+   AUDIO PROCEDURAL — Web Audio API (sin archivos externos)
+   ======================================================================= */
+const AudioEngine = (() => {
+  let ctx = null, master = null, enabled = false, noiseBuf = null, tickAcc = 0;
+  const N = {};          // nodos persistentes
+
+  function makeNoise(sec) {
+    const len = Math.floor(ctx.sampleRate * sec);
+    const b = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = b.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return b;
+  }
+  function makeBrown(sec) {           // ruido marrón (integrado) para el rumble grave
+    const len = Math.floor(ctx.sampleRate * sec);
+    const b = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = b.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = last * 3.5; }
+    return b;
+  }
+  const filt = (type, f, Q = 0.7) => { const x = ctx.createBiquadFilter(); x.type = type; x.frequency.value = f; x.Q.value = Q; return x; };
+  const gain = v => { const g = ctx.createGain(); g.gain.value = v; return g; };
+  const osc  = (type, f) => { const o = ctx.createOscillator(); o.type = type; o.frequency.value = f; o.start(); return o; };
+
+  function init() {
+    if (ctx) return true;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    ctx = new AC();
+    master = gain(0);
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -16; comp.knee.value = 10; comp.ratio.value = 5; comp.attack.value = 0.004; comp.release.value = 0.25;
+    master.connect(comp).connect(ctx.destination);
+
+    noiseBuf = makeNoise(3);
+    const noise = ctx.createBufferSource(); noise.buffer = noiseBuf; noise.loop = true; noise.start();
+    const brown = ctx.createBufferSource(); brown.buffer = makeBrown(4); brown.loop = true; brown.start();
+
+    // 1) Silbido del compresor: paso de álabes (sierra + seno) → pasabanda
+    N.o1 = osc('sawtooth', 200); N.o2 = osc('sine', 400);
+    N.whineBP = filt('bandpass', 600, 5);
+    N.o1.connect(gain(0.22)).connect(N.whineBP);
+    N.o2.connect(gain(0.6)).connect(N.whineBP);
+    N.gWhine = gain(0); N.whineBP.connect(N.gWhine).connect(master);
+
+    // 2) Siseo de aire en el compresor: ruido blanco con pasabanda que sigue N1
+    N.hissBP = filt('bandpass', 800, 1.3);
+    N.gHiss = gain(0); noise.connect(N.hissBP).connect(N.gHiss).connect(master);
+
+    // 3) Tono de turbina (más agudo y tenue)
+    N.o3 = osc('square', 1500);
+    N.turbBP = filt('bandpass', 1500, 12);
+    N.gTurb = gain(0); N.o3.connect(N.turbBP).connect(N.gTurb).connect(master);
+
+    // 4) Rugido de combustión: ruido pasabajos + rumble marrón
+    N.roarLP = filt('lowpass', 300, 0.8);
+    N.gRoar = gain(0); noise.connect(N.roarLP).connect(N.gRoar).connect(master);
+    N.rumbleLP = filt('lowpass', 140, 0.9);
+    N.gRumble = gain(0); brown.connect(N.rumbleLP).connect(N.gRumble).connect(master);
+
+    // 5) Motor eléctrico del starter
+    N.st1 = osc('triangle', 220); N.st2 = osc('sawtooth', 110);
+    N.stLP = filt('lowpass', 1400, 1);
+    N.st1.connect(gain(0.6)).connect(N.stLP); N.st2.connect(gain(0.25)).connect(N.stLP);
+    N.gStarter = gain(0); N.stLP.connect(N.gStarter).connect(master);
+
+    // 6) Postquemador: rugido grave + siseo de chorro
+    N.abLP = filt('lowpass', 650, 0.7);
+    N.abPk = filt('peaking', 110, 1); N.abPk.gain.value = 8;
+    N.gAB = gain(0); brown.connect(N.abLP).connect(N.abPk).connect(N.gAB).connect(master);
+    N.abBP = filt('bandpass', 2200, 0.8);
+    N.gABhiss = gain(0); noise.connect(N.abBP).connect(N.gABhiss).connect(master);
+    return true;
+  }
+
+  /* Ráfaga de ruido con envolvente (bang, ticks, crackle) */
+  function burst({ dur = 0.3, g = 1, type = 'lowpass', f = 1000, Q = 0.7, rate = 1, sweep = null, delay = 0 }) {
+    if (!ctx || !enabled) return;
+    const t = ctx.currentTime + delay;
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.playbackRate.value = rate;
+    const fl = filt(type, f, Q);
+    if (sweep) { fl.frequency.setValueAtTime(sweep[0], t); fl.frequency.exponentialRampToValueAtTime(sweep[1], t + dur * 0.4); }
+    const env = gain(0);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(g, t + 0.004);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(fl).connect(env).connect(master);
+    src.start(t, Math.random() * 2, dur + 0.05);
+  }
+  function thump(f0, f1, dur, g) {
+    if (!ctx || !enabled) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    const env = gain(0);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(g, t + 0.01);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(env).connect(master); o.start(t); o.stop(t + dur + 0.05);
+  }
+  const bang   = (i = 1) => { burst({ dur: 0.55, g: 1.3 * i, f: 1600 }); burst({ dur: 0.8, g: 0.8 * i, type: 'bandpass', f: 260, Q: 1.2 }); thump(95, 26, 0.6, 1.2 * i); };
+  const whoomp = (i = 1) => { burst({ dur: 1.0, g: 0.8 * i, f: 200, sweep: [140, 2200] }); thump(62, 32, 0.9, 0.7 * i); };
+  const tick   = () => { burst({ dur: 0.018, g: 0.5, type: 'highpass', f: 3500 }); burst({ dur: 0.03, g: 0.35, type: 'bandpass', f: 6200, Q: 3 }); };
+  const crackle = () => burst({ dur: 0.012 + Math.random() * 0.045, g: 0.25 + Math.random() * 0.55, type: 'highpass', f: 900 + Math.random() * 3200, rate: 0.6 + Math.random() * 0.9 });
+
+  function update(st, dt) {
+    if (!ctx || !enabled) return;
+    const t = ctx.currentTime, n = st.n, lit = st.lit ? 1 : 0;
+    const set = (p, v, tc = 0.05) => p.setTargetAtTime(v, t, tc);
+    const wob = st.damage > 30 ? 1 + 0.015 * Math.sin(st.t * 37) * (st.damage / 100) : 1;   // vibración por daño
+
+    const fBlade = (120 + n * 2600) * wob;           // frecuencia de paso de álabes ∝ N1
+    set(N.o1.frequency, fBlade); set(N.o2.frequency, fBlade * 2.01);
+    set(N.whineBP.frequency, fBlade * 1.6);
+    set(N.gWhine.gain, Math.pow(clamp(n * 1.15, 0, 1.2), 1.5) * 0.2);
+    set(N.hissBP.frequency, 400 + n * 5200);
+    set(N.gHiss.gain, Math.pow(n, 1.3) * 0.28);
+    set(N.o3.frequency, (900 + n * 4200) * wob); set(N.turbBP.frequency, 900 + n * 4200);
+    set(N.gTurb.gain, n * n * 0.045);
+    set(N.roarLP.frequency, 180 + n * 1000);
+    set(N.gRoar.gain, lit * (0.06 + 0.42 * Math.pow(n, 1.5)), 0.12);
+    set(N.gRumble.gain, lit * (0.18 + 0.55 * n), 0.15);
+    set(N.st1.frequency, 200 + n * 900); set(N.st2.frequency, 100 + n * 450);
+    set(N.gStarter.gain, st.starter ? 0.1 : 0, 0.15);
+    set(N.gAB.gain, st.abLevel * 0.95, 0.1);
+    set(N.gABhiss.gain, st.abLevel * 0.16, 0.1);
+
+    if (st.ign && !st.failed) { tickAcc += dt; if (tickAcc > 0.45) { tickAcc = 0; tick(); } } else tickAcc = 0.4;
+    if (st.abLevel > 0.15) {
+      const p = 28 * st.abLevel * dt;
+      let k = Math.floor(p) + (Math.random() < p % 1 ? 1 : 0);
+      k = Math.min(k, 4);
+      for (let i = 0; i < k; i++) crackle();
+    }
+  }
+  function setEnabled(on) {
+    if (!init()) return false;
+    if (ctx.state === 'suspended') ctx.resume();
+    enabled = on;
+    master.gain.setTargetAtTime(on ? 0.85 : 0, ctx.currentTime, 0.08);
+    return true;
+  }
+  return { setEnabled, update, bang, whoomp, isOn: () => enabled };
+})();
+
+/* =======================================================================
+   UI — referencias y utilidades de canvas
+   ======================================================================= */
+const $ = id => document.getElementById(id);
+const cvN1 = $('gN1'), cvEGT = $('gEGT'), cvThr = $('gThrust'), cvFuel = $('gFuel');
+const cvEngine = $('engineCanvas'), cvTS = $('tsCanvas');
+const logEl = $('log');
+const ui = { units: 'SI', userMuted: false, spinC: 0, spinT: 0 };
+
+const ro = new ResizeObserver(entries => {
+  for (const e of entries) {
+    const c = e.target, r = e.contentRect;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    c._w = r.width; c._h = r.height; c._dpr = dpr;
+    c.width = Math.max(1, Math.round(r.width * dpr));
+    c.height = Math.max(1, Math.round(r.height * dpr));
+    if (c === cvTS) drawTS();
+  }
+});
+[cvN1, cvEGT, cvThr, cvFuel, cvEngine, cvTS].forEach(c => ro.observe(c));
+function gctx(c) {
+  if (!c._w) return null;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(c._dpr, 0, 0, c._dpr, 0, 0);
+  return { ctx, w: c._w, h: c._h };
+}
+function niceCeil(x) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1e-9))));
+  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= x) return m * p;
+  return 10 * p;
+}
+const fmtT = s => { const m = Math.floor(s / 60), x = Math.floor(s % 60); return `T+${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`; };
+
+/* =======================================================================
+   BITÁCORA
+   ======================================================================= */
+let lastLog = null;
+function log(msg, lvl = 'info') {
+  if (lastLog && lastLog.msg === msg && S.t - lastLog.t < 6) {
+    lastLog.count++; lastLog.t = S.t;
+    lastLog.el.querySelector('.cnt').textContent = '×' + lastLog.count;
+    return;
+  }
+  const li = document.createElement('li');
+  li.className = 'lg ' + lvl;
+  li.innerHTML = `<time>${fmtT(S.t)}</time><span class="m"></span><span class="cnt"></span>`;
+  li.querySelector('.m').textContent = msg;
+  logEl.prepend(li);
+  while (logEl.children.length > 80) logEl.lastChild.remove();
+  lastLog = { msg, t: S.t, count: 1, el: li };
+}
+
+/* Conectar ganchos de física → UI/audio */
+H.log = log;
+H.bang = i => AudioEngine.bang(i);
+H.whoomp = i => AudioEngine.whoomp(i);
+H.setSwitch = (k, v) => syncButtons();
+
+/* =======================================================================
+   INSTRUMENTOS (canvas)
+   ======================================================================= */
+function drawGauge(cv, o) {
+  const g = gctx(cv); if (!g) return;
+  const { ctx, w, h } = g;
+  ctx.clearRect(0, 0, w, h);
+  const R = Math.min(w, h) * 0.45, cx = w / 2, cy = h / 2 + R * 0.03;
+  const A0 = Math.PI * 0.75, SW = Math.PI * 1.5;
+  const ang = v => A0 + SW * clamp((v - o.min) / (o.max - o.min), 0, 1);
+
+  // Carátula
+  const grd = ctx.createRadialGradient(cx, cy - R * 0.4, R * 0.1, cx, cy, R);
+  grd.addColorStop(0, '#13294d'); grd.addColorStop(1, '#060f20');
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fillStyle = grd; ctx.fill();
+  ctx.lineWidth = Math.max(2, R * 0.035);
+  ctx.strokeStyle = o.alarm && (Math.floor(S.t * 4) % 2 === 0) ? '#ff3b52' : '#24467a';
+  ctx.stroke();
+
+  // Bandas de color (verde / ámbar / roja)
+  (o.bands || []).forEach(([a, b, col]) => {
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.86, ang(a), ang(b));
+    ctx.strokeStyle = col; ctx.lineWidth = R * 0.075; ctx.stroke();
+  });
+
+  // Marcas
+  const minor = o.step / 5, count = Math.round((o.max - o.min) / minor);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `600 ${Math.max(8, R * 0.12)}px ${getComputedStyle(document.body).getPropertyValue('--mono')}`;
+  for (let i = 0; i <= count; i++) {
+    const v = o.min + i * minor, a = ang(v), major = i % 5 === 0;
+    const r1 = R * 0.93, r2 = R * (major ? 0.75 : 0.83);
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+    ctx.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2);
+    ctx.strokeStyle = major ? '#c4d5ee' : '#59739a'; ctx.lineWidth = major ? R * 0.022 : R * 0.011; ctx.stroke();
+    if (major) {
+      ctx.fillStyle = '#8fa7c9';
+      const lv = o.tickFmt ? o.tickFmt(v) : nf(Math.round(v));
+      ctx.fillText(lv, cx + Math.cos(a) * R * 0.6, cy + Math.sin(a) * R * 0.6);
+    }
+  }
+
+  // Títulos
+  ctx.fillStyle = '#dbe7f8'; ctx.font = `700 ${R * 0.13}px system-ui, sans-serif`;
+  ctx.fillText(o.title, cx, cy - R * 0.33);
+  ctx.fillStyle = '#7d96bb'; ctx.font = `600 ${R * 0.095}px system-ui, sans-serif`;
+  ctx.fillText(o.unit, cx, cy - R * 0.17);
+
+  // Aguja
+  const a = ang(o.value);
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(a);
+  ctx.beginPath(); ctx.moveTo(-R * 0.14, -R * 0.03); ctx.lineTo(R * 0.86, 0); ctx.lineTo(-R * 0.14, R * 0.03); ctx.closePath();
+  ctx.fillStyle = o.alarm ? '#ff6a7c' : '#f2f6ff';
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 6; ctx.fill();
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(cx, cy, R * 0.07, 0, Math.PI * 2); ctx.fillStyle = '#1d3358'; ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = '#6c84a8'; ctx.stroke();
+
+  // Lectura digital
+  const bw = R * 1.05, bh = R * 0.27, by = cy + R * 0.3;
+  ctx.fillStyle = '#030914'; ctx.strokeStyle = '#1d3a66'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect ? ctx.roundRect(cx - bw / 2, by, bw, bh, 4) : ctx.rect(cx - bw / 2, by, bw, bh); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = o.alarm ? '#ff6a7c' : (o.digitColor || '#7cf0b2');
+  ctx.font = `700 ${R * 0.19}px ui-monospace, Menlo, Consolas, monospace`;
+  ctx.fillText(o.digital, cx, by + bh / 2 + 1);
+  if (o.sub) {
+    ctx.fillStyle = '#7d96bb'; ctx.font = `600 ${R * 0.085}px ui-monospace, Menlo, Consolas, monospace`;
+    ctx.fillText(o.sub, cx, by + bh + R * 0.13);
+  }
+}
+
+function drawInstruments() {
+  // N1
+  drawGauge(cvN1, {
+    title: 'N1', unit: '% RPM', min: 0, max: 120, step: 20, value: S.n * 100,
+    bands: [[P.nIdle * 100, 100, '#1f8a57'], [100, 105, '#c98a12'], [105, 120, '#c4253a']],
+    digital: nf(S.n * 100, 1), sub: `${nf(S.n * 10400)} rpm`,
+    alarm: S.overspeed
+  });
+  // EGT
+  const rlC = K2C(T.redline), egtMax = niceCeil(rlC + 220);
+  drawGauge(cvEGT, {
+    title: 'EGT', unit: '°C', min: 0, max: egtMax, step: egtMax / 6, value: K2C(S.egt),
+    bands: [[250, rlC - 40, '#1f8a57'], [rlC - 40, rlC, '#c98a12'], [rlC, egtMax, '#c4253a']],
+    digital: nf(K2C(S.egt)), sub: `LÍNEA ROJA ${nf(rlC)} °C`,
+    alarm: S.overtemp, digitColor: S.egt > T.redline - 40 ? '#ffd27a' : '#7cf0b2'
+  });
+  // Empuje
+  const Fmax = T.design.valid ? T.design.Fab : 1e5;
+  const si = ui.units === 'SI';
+  const thrScale = si ? 1 / 1000 : N_TO_LBF;
+  const thrMax = niceCeil(Fmax * 1.12 * thrScale);
+  const kfmt = v => v >= 1000 ? nf(v / 1000, v % 1000 ? 1 : 0) + 'k' : nf(v);
+  drawGauge(cvThr, {
+    title: 'EMPUJE', unit: si ? 'kN' : 'lbf', min: 0, max: thrMax, step: thrMax / 5, value: S.F * thrScale,
+    bands: S.abLevel > 0.05 ? [[0, S.F * thrScale, 'rgba(255,138,42,.55)']] : [],
+    tickFmt: v => si ? nf(v) : kfmt(v),
+    digital: si ? nf(S.F / 1000, 1) : nf(S.F * N_TO_LBF),
+    sub: si ? `${nf(S.F * N_TO_LBF)} lbf` : `${nf(S.F / 1000, 1)} kN`,
+    digitColor: S.abLevel > 0.05 ? '#ffb46a' : '#7cf0b2'
+  });
+  // Combustible + TSFC
+  const wfMax = T.design.valid ? (T.design.wf + T.design.wfab) : 1;
+  const fScale = si ? 3600 : 3600 * KG_TO_LB;
+  const fMax = niceCeil(wfMax * 1.15 * fScale);
+  drawGauge(cvFuel, {
+    title: 'FLUJO COMB.', unit: si ? 'kg/h' : 'lb/h', min: 0, max: fMax, step: fMax / 5, value: S.wfTot * fScale,
+    tickFmt: kfmt,
+    digital: nf(S.wfTot * fScale),
+    sub: S.tsfc > 0 ? (si ? `TSFC ${nf(S.tsfc * 1e6, 1)} g/kN·s` : `TSFC ${nf(S.tsfc * TSFC_SI_TO_IMP, 2)} lb/lbf·h`) : 'TSFC —',
+    digitColor: '#9fd2ff'
+  });
+}
+
+/* =======================================================================
+   VISTA EN CORTE DEL MOTOR (canvas animado)
+   ======================================================================= */
+const OUT = [[100,112],[130,120],[200,118],[385,90],[405,100],[525,100],[545,93],[615,90],[700,80],[770,70]];
+const HUB = [[100,0],[205,44],[385,62],[525,62],[615,52],[720,0],[770,0]];
+function interp(tab, x) {
+  if (x <= tab[0][0]) return tab[0][1];
+  for (let i = 1; i < tab.length; i++) if (x <= tab[i][0]) {
+    const [x0, y0] = tab[i-1], [x1, y1] = tab[i];
+    return lerp(y0, y1, (x - x0) / (x1 - x0));
+  }
+  return tab[tab.length - 1][1];
+}
+let nozOpen = 0;
+const rOut = x => x > 700 ? lerp(80, 70 + 15 * nozOpen, (x - 700) / 70) : interp(OUT, x);
+const rHub = x => interp(HUB, x);
+function heatColor(x, a = 1) {
+  x = clamp(x, 0, 1);
+  const r = Math.round(lerp(110, 255, clamp(x * 1.6, 0, 1)));
+  const g = Math.round(lerp(18, 238, clamp((x - 0.25) / 0.75, 0, 1)));
+  const b = Math.round(lerp(10, 190, clamp((x - 0.72) / 0.28, 0, 1)));
+  return `rgba(${r},${g},${b},${a})`;
+}
+function band(ctx, f1, f2, x0, x1, sgn) {
+  ctx.beginPath();
+  for (let x = x0; x <= x1; x += 5) ctx.lineTo(x, sgn * f1(x));
+  for (let x = x1; x >= x0; x -= 5) ctx.lineTo(x, sgn * f2(x));
+  ctx.closePath();
+}
+const flow = Array.from({ length: 80 }, () => ({ x: 100 + Math.random() * 670, lane: Math.random(), s: Math.random() < 0.5 ? -1 : 1 }));
+const fx = [];   // humo y chispas
+const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function drawEngine(dt) {
+  const g = gctx(cvEngine); if (!g) return;
+  const { ctx, w, h } = g;
+  nozOpen = S.fadec ? S.abLevel : 0;
+  const lit = S.lit ? 1 : 0;
+  const heat = clamp((S.egt - 450) / 900, 0, 1);
+  ui.spinC += S.n * dt * 23; ui.spinT += S.n * dt * 27;
+
+  // Fondo de la celda de pruebas
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, '#081631'); bg.addColorStop(1, '#040a17');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = 'rgba(62,166,255,.06)'; ctx.lineWidth = 1;
+  for (let x = 0; x < w; x += 32) { ctx.beginPath(); ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 32) { ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(w, y + .5); ctx.stroke(); }
+
+  const sc = Math.min(w / 1080, h / 330);
+  ui.eng = { sc, ox: w / 2 - 560 * sc, oy: h * 0.48 };   // transformación para los puntos de información
+  const shk = reduceMotion ? 0 : S.shake * 6;
+  ctx.save();
+  ctx.translate(w / 2 - 560 * sc + (Math.random() - .5) * shk, h * 0.48 + (Math.random() - .5) * shk);
+  ctx.scale(sc, sc);
+
+  // Pilón de montaje y piso
+  ctx.fillStyle = '#132a4d';
+  ctx.fillRect(330, -260, 26, 130); ctx.fillRect(560, -260, 26, 140);
+  ctx.fillStyle = '#0d1f3c'; ctx.fillRect(250, -270, 420, 16);
+
+  // Ductos de gas (interior)
+  for (const s of [-1, 1]) {
+    band(ctx, rHub, rOut, 100, 770, s);
+    const gp = ctx.createLinearGradient(100, 0, 770, 0);
+    gp.addColorStop(0, '#0a1630'); gp.addColorStop(0.45, '#0b1730');
+    gp.addColorStop(0.62, lit ? heatColor(heat * 0.6, 0.55) : '#0c1830');
+    gp.addColorStop(1, lit ? heatColor(heat * 0.45, 0.35) : '#0a1428');
+    ctx.fillStyle = gp; ctx.fill();
+  }
+
+  // Partículas de flujo de aire
+  const vAir = 30 + 950 * S.n;
+  for (const p of flow) {
+    p.x += vAir * dt * (0.8 + p.lane * 0.4);
+    if (p.x > 770) { p.x = 100 + Math.random() * 20; p.lane = Math.random(); }
+    const rh = rHub(p.x), ro_ = rOut(p.x);
+    const y = p.s * (rh + 4 + p.lane * Math.max(0, ro_ - rh - 8));
+    const hot = p.x > 405 && lit;
+    ctx.fillStyle = hot ? heatColor(0.4 + heat * 0.5, 0.55) : `rgba(124,196,255,${0.15 + S.n * 0.5})`;
+    const len = 2 + S.n * 10;
+    ctx.fillRect(p.x - len, y - 1, len, 2);
+  }
+
+  // Álabes del compresor (8 etapas) — proyección de rotación
+  const blur = clamp((S.n - 0.15) / 0.5, 0, 1);
+  for (let i = 0; i < 9; i++) {
+    const x = 212 + i * 20, tip = rOut(x) - 3, hub = rHub(x) + 2, nb = 7;
+    ctx.fillStyle = `rgba(150,180,220,${0.05 + 0.18 * blur})`;     // disco difuminado a alta velocidad
+    ctx.fillRect(x - 4, -tip, 8, tip - hub); ctx.fillRect(x - 4, hub, 8, tip - hub);
+    for (let k = 0; k < nb; k++) {
+      const th = ui.spinC + k * Math.PI * 2 / nb + i * 0.45, c = Math.cos(th), s = Math.sin(th);
+      const a = (s > 0 ? 0.85 : 0.25) * (1 - blur * 0.65);
+      ctx.strokeStyle = `rgba(${Math.round(150 + 80 * s)},${Math.round(175 + 60 * s)},235,${a})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(x - 4 * s, hub * c >= 0 ? Math.max(hub, hub * c) : Math.min(-hub, hub * c));
+      ctx.lineTo(x + 4 * s, tip * c); ctx.stroke();
+    }
+  }
+  // Estatores (fijos)
+  ctx.strokeStyle = 'rgba(90,120,160,.5)'; ctx.lineWidth = 2;
+  for (let i = 0; i < 9; i++) {
+    const x = 222 + i * 20, tip = rOut(x), hub = rHub(x);
+    ctx.beginPath(); ctx.moveTo(x, -tip); ctx.lineTo(x + 3, -tip + (tip - hub) * 0.45); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, tip); ctx.lineTo(x + 3, tip - (tip - hub) * 0.45); ctx.stroke();
+  }
+
+  // Cámara de combustión (liner) y llamas
+  for (const s of [-1, 1]) {
+    ctx.strokeStyle = '#3a5a86'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(410, s * 70); ctx.lineTo(515, s * 68); ctx.moveTo(410, s * 94); ctx.lineTo(515, s * 94); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(410, s * 82, 8, 12, 0, Math.PI / 2, Math.PI * 1.5); ctx.stroke();
+  }
+  if (lit || S.surgeFlash > 0) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const inten = clamp(0.25 + 0.75 * S.n * Math.min(S.r || 1, 1.6), 0, 1.4);
+    for (const s of [-1, 1]) for (let j = 0; j < 6; j++) {
+      const x = 425 + j * 17 + Math.sin(S.t * 31 + j) * 3;
+      const y = s * 82 + Math.cos(S.t * 23 + j * 2) * 3;
+      const r = (10 + inten * 10) * (0.85 + Math.random() * 0.3);
+      const gr = ctx.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, `rgba(255,245,200,${0.55 * inten})`);
+      gr.addColorStop(0.4, `rgba(255,150,40,${0.45 * inten})`);
+      gr.addColorStop(1, 'rgba(255,60,0,0)');
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Álabes de turbina (3 etapas, color por temperatura)
+  for (let i = 0; i < 3; i++) {
+    const x = 552 + i * 24, tip = rOut(x) - 3, hub = rHub(x) + 2, nb = 9;
+    ctx.fillStyle = lit ? heatColor(heat * 0.7, 0.12 + 0.2 * blur) : `rgba(150,170,200,${0.05 + 0.15 * blur})`;
+    ctx.fillRect(x - 4, -tip, 8, tip - hub); ctx.fillRect(x - 4, hub, 8, tip - hub);
+    for (let k = 0; k < nb; k++) {
+      const th = -ui.spinT + k * Math.PI * 2 / nb + i, c = Math.cos(th), s = Math.sin(th);
+      const a = (s > 0 ? 0.9 : 0.25) * (1 - blur * 0.6);
+      ctx.strokeStyle = lit ? heatColor(heat * 0.9 + 0.1 * s, a) : `rgba(170,180,200,${a})`;
+      ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.moveTo(x + 4 * s, hub * c >= 0 ? Math.max(hub, hub * c) : Math.min(-hub, hub * c)); ctx.lineTo(x - 4 * s, tip * c); ctx.stroke();
+    }
+  }
+
+  // Núcleo / eje / cono de cola
+  for (const s of [-1, 1]) {
+    band(ctx, () => 0, rHub, 100, 770, s);
+    const mg = ctx.createLinearGradient(0, s * 62, 0, 0);
+    mg.addColorStop(0, '#4b6286'); mg.addColorStop(1, '#22344f');
+    ctx.fillStyle = mg; ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(200,220,255,.35)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(205, 0); ctx.lineTo(640, 0); ctx.stroke();
+  // espiral del spinner (indica giro)
+  ctx.save(); ctx.beginPath(); band(ctx, () => 0, rHub, 100, 205, -1); ctx.clip();
+  ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 2;
+  for (let k = 0; k < 3; k++) { const ph = (ui.spinC * 0.5 + k * 2.1) % (Math.PI * 2); ctx.beginPath(); ctx.moveTo(110, 0); ctx.quadraticCurveTo(160, -30 * Math.cos(ph), 205, -44 * Math.cos(ph)); ctx.stroke(); }
+  ctx.restore();
+
+  // Carcasa exterior
+  for (const s of [-1, 1]) {
+    band(ctx, rOut, x => rOut(x) + 14, 100, 770, s);
+    const cg = ctx.createLinearGradient(0, s * 130, 0, s * 70);
+    cg.addColorStop(0, '#5a7398'); cg.addColorStop(0.5, '#2c4468'); cg.addColorStop(1, '#1a2c48');
+    ctx.fillStyle = cg; ctx.fill();
+    ctx.strokeStyle = 'rgba(160,190,230,.35)'; ctx.lineWidth = 1; ctx.stroke();
+  }
+  // tinte térmico de la carcasa caliente
+  if (S.egt > 600) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const s of [-1, 1]) {
+      band(ctx, rOut, x => rOut(x) + 14, 525, 770, s);
+      ctx.fillStyle = heatColor(heat * 0.6, clamp((S.egt - 600) / 1400, 0, 0.35)); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Penacho de escape
+  const noz = rOut(770), Fn = clamp(S.F / Math.max(1, T.design.F || 1), 0, 1.3);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  if (S.n > 0.05) {
+    const L = 120 + 360 * Fn;
+    const pg = ctx.createLinearGradient(770, 0, 770 + L, 0);
+    pg.addColorStop(0, lit ? heatColor(0.35 + heat * 0.4, 0.28) : `rgba(140,180,230,${0.12 * S.n})`);
+    pg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = pg;
+    ctx.beginPath(); ctx.moveTo(770, -noz); ctx.lineTo(770 + L, -noz - L * 0.16); ctx.lineTo(770 + L, noz + L * 0.16); ctx.lineTo(770, noz); ctx.closePath(); ctx.fill();
+    if (lit) for (let k = 0; k < 6; k++) {         // distorsión térmica
+      const xx = 790 + ((S.t * 260 * (0.5 + S.n) + k * 70) % L);
+      ctx.fillStyle = `rgba(255,200,150,${0.05 * (1 - (xx - 770) / L)})`;
+      ctx.beginPath(); ctx.ellipse(xx, Math.sin(S.t * 9 + k) * 10, 26, noz * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  if (S.abLevel > 0.02) {
+    const A = S.abLevel, L2 = (230 + 380 * A) * (0.94 + Math.random() * 0.12);
+    const ag = ctx.createLinearGradient(770, 0, 770 + L2, 0);
+    ag.addColorStop(0, `rgba(255,250,215,${0.85 * A})`);
+    ag.addColorStop(0.25, `rgba(255,170,60,${0.6 * A})`);
+    ag.addColorStop(0.7, `rgba(255,90,20,${0.25 * A})`);
+    ag.addColorStop(1, 'rgba(255,40,0,0)');
+    ctx.fillStyle = ag;
+    ctx.beginPath(); ctx.moveTo(770, -noz * 0.95);
+    ctx.quadraticCurveTo(770 + L2 * 0.45, -noz * 0.7, 770 + L2, 0);
+    ctx.quadraticCurveTo(770 + L2 * 0.45, noz * 0.7, 770, noz * 0.95); ctx.closePath(); ctx.fill();
+    for (let i = 0; i < 6; i++) {                    // diamantes de choque
+      const x = 800 + i * 58, hh = noz * 0.55 * (1 - i * 0.13), a = (0.8 - i * 0.13) * A;
+      const dg = ctx.createRadialGradient(x, 0, 0, x, 0, 34);
+      dg.addColorStop(0, `rgba(255,255,240,${a})`); dg.addColorStop(0.5, `rgba(160,190,255,${a * 0.5})`); dg.addColorStop(1, 'rgba(255,200,120,0)');
+      ctx.fillStyle = dg;
+      ctx.beginPath(); ctx.moveTo(x - 30, 0); ctx.lineTo(x, -hh); ctx.lineTo(x + 30, 0); ctx.lineTo(x, hh); ctx.closePath(); ctx.fill();
+    }
+  }
+  // Estallido por surge en la admisión
+  if (S.surgeFlash > 0) {
+    const f = S.surgeFlash, sg = ctx.createRadialGradient(100, 0, 0, 100, 0, 200 * f);
+    sg.addColorStop(0, `rgba(255,240,190,${0.9 * f})`); sg.addColorStop(0.4, `rgba(255,120,30,${0.6 * f})`); sg.addColorStop(1, 'rgba(255,50,0,0)');
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(100, 0, 200 * f, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+
+  // Humo y chispas por daño
+  const smoky = (S.damage > 35 && S.n > 0.1) || (S.failed && S.egt > 500);
+  if (smoky && Math.random() < dt * (S.failed ? 40 : S.damage / 4)) {
+    fx.push({ x: 770, y: (Math.random() - .5) * noz, vx: 80 + Math.random() * 200 * (S.n + .2), vy: (Math.random() - .7) * 40, r: 6, life: 2.2, spark: false });
+    if (Math.random() < 0.4 || S.failed) fx.push({ x: 600 + Math.random() * 170, y: (Math.random() - .5) * 120, vx: 150 + Math.random() * 300, vy: (Math.random() - .5) * 220, r: 1.6, life: 0.6, spark: true });
+  }
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const p = fx[i]; p.life -= dt; if (p.life <= 0) { fx.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; if (!p.spark) { p.r += 18 * dt; p.vy -= 12 * dt; } else p.vy += 300 * dt;
+    if (p.spark) { ctx.fillStyle = `rgba(255,${180 + Math.random() * 70 | 0},90,${p.life / 0.6})`; ctx.fillRect(p.x, p.y, 3, 2); }
+    else { ctx.fillStyle = `rgba(90,100,115,${0.35 * p.life / 2.2})`; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); }
+  }
+
+  // Rótulos de componentes y estaciones
+  ctx.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(160,190,230,.75)';
+  [['ADMISIÓN', 150], ['COMPRESOR', 295], ['CÁMARA', 462], ['TURBINA', 575], ['TOBERA', 700]].forEach(([t, x]) => ctx.fillText(t, x, -150));
+  ctx.fillStyle = 'rgba(124,196,255,.6)';
+  [['2', 205], ['3', 392], ['4', 530], ['5', 618], ['9', 770]].forEach(([t, x]) => {
+    ctx.fillText(t, x, 160);
+    ctx.strokeStyle = 'rgba(124,196,255,.25)'; ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(x, 138); ctx.lineTo(x, 148); ctx.stroke(); ctx.setLineDash([]);
+  });
+  ctx.fillStyle = 'rgba(124,196,255,.45)'; ctx.textAlign = 'left';
+  ctx.fillText('ESTACIONES', 100, 160);
+  ctx.restore();
+
+  // Indicador FADEC/MANUAL en esquina
+  ctx.font = '700 11px ui-monospace, Menlo, Consolas, monospace'; ctx.textAlign = 'right';
+  ctx.fillStyle = S.fadec ? 'rgba(53,214,132,.8)' : 'rgba(255,178,31,.95)';
+  ctx.fillText(S.fadec ? 'FADEC · AUTOMÁTICO' : 'FADEC APAGADO · MANUAL', w - 12, 18);
+  ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(160,190,230,.6)';
+  ctx.fillText(`TOBERA ${design.nozType === 'cd' ? 'C-D' : 'CONV.'} · A9 ${nf(100 + nozOpen * 45)} %`, 12, 18);
+}
+
+/* =======================================================================
+   DESIGN OFFICE — sliders, resultados y diagrama T-s
+   ======================================================================= */
+function buildDesignUI() {
+  const host = $('paramGroups');
+  host.innerHTML = '';
+  const groups = {};
+  DESIGN_PARAMS.forEach(p => {
+    if (!groups[p.g]) {
+      const sec = document.createElement('div'); sec.className = 'group';
+      sec.innerHTML = `<h3>${p.g.toUpperCase()} <em>${p.st}</em></h3>`;
+      host.appendChild(sec); groups[p.g] = sec;
+    }
+    const wrap = document.createElement('div'); wrap.className = 'param';
+    wrap.innerHTML = `<label for="dp_${p.key}"><span>${p.label}<button type="button" class="ib inl" data-info="p_${p.key}" aria-label="Información: ${p.label}">i</button></span><b id="dv_${p.key}">${p.fmt(design[p.key])}</b></label>
+      <input class="slim" type="range" id="dp_${p.key}" min="${p.min}" max="${p.max}" step="${p.step}" value="${design[p.key]}">`;
+    groups[p.g].appendChild(wrap);
+    wrap.querySelector('input').addEventListener('input', e => {
+      const d = { ...design, [p.key]: parseFloat(e.target.value) };
+      $('dv_' + p.key).textContent = p.fmt(d[p.key]);
+      applyDesign(d);
+    });
+  });
+  // Selector de tobera
+  const noz = document.createElement('div'); noz.className = 'param';
+  noz.innerHTML = `<label for="dp_noz"><span>Tipo de tobera<button type="button" class="ib inl" data-info="p_nozType" aria-label="Información: tipo de tobera">i</button></span></label>
+    <select id="dp_noz">${Object.entries(NOZ_TYPES).map(([k, v]) => `<option value="${k}" ${design.nozType === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
+  groups['Tobera y postquemador'].appendChild(noz);
+  noz.querySelector('select').addEventListener('change', e => applyDesign({ ...design, nozType: e.target.value }));
+}
+
+let designLogTimer = null;
+function applyDesign(d) {
+  setDesign(d);
+  updateDesignOutputs();
+  drawTS();
+  clearTimeout(designLogTimer);
+  designLogTimer = setTimeout(() => {
+    const c = T.design;
+    log(c.valid ? `Oficina de diseño: nuevo punto de diseño — F ${nf(c.F / 1000, 1)} kN, EGT ${nf(K2C(c.T5))} °C` : 'Oficina de diseño: ciclo inviable — ' + (c.reason || ''), c.valid ? 'info' : 'warn');
+  }, 700);
+}
+
+function updateDesignOutputs() {
+  const c = T.design, el = $('outputs'), v = $('verdict');
+  if (!c.valid) {
+    v.className = 'verdict bad'; v.textContent = 'Ciclo inviable: ' + (c.reason || 'parámetros fuera de rango');
+  } else if (!T.valid) {
+    v.className = 'verdict bad'; v.textContent = 'El motor no puede autosostenerse en ralentí con este diseño';
+  } else if (design.TIT > P.TITmat) {
+    v.className = 'verdict warn'; v.textContent = `T4 supera el límite del material (${nf(P.TITmat)} K): el FADEC limitará N1 a ${nf(T.nT4lim * 100)} %`;
+  } else {
+    v.className = 'verdict ok'; v.textContent = 'Ciclo válido · listo para prueba en celda';
+  }
+  const row = (k, val) => `<span>${k}</span><b>${val}</b>`;
+  if (!c.valid) {
+    el.innerHTML = row('T3 salida de compresor', `${nf(c.T3)} K`) + row('P3', `${nf(c.P3 / 1000)} kPa`) + row('T4 / TIT', `${nf(c.T4)} K`);
+    return;
+  }
+  const kN = x => nf(x / 1000, 1) + ' kN';
+  const lbf = x => nf(x * N_TO_LBF) + ' lbf';
+  const tsfc = (wf, F) => `${nf(wf / F * 1e6, 1)} g/kN·s · ${nf(wf / F * TSFC_SI_TO_IMP, 2)}`;
+  const Vj = c.V;
+  const etaTh = 0.5 * c.mdot * (1 + c.f) * Vj * Vj / (c.wf * GAS.LHV);
+  el.innerHTML =
+    row('Empuje seco (MIL)', kN(c.F)) + row('', lbf(c.F)) +
+    row('Empuje con postquemador', kN(c.Fab)) + row('', lbf(c.Fab)) +
+    row('Ganancia por postquemador', `+${nf((c.Fab / c.F - 1) * 100)} %`) +
+    '<i class="sep"></i>' +
+    row('TSFC seco [g/kN·s · lb/lbf·h]', tsfc(c.wf, c.F)) +
+    row('TSFC con postquemador', tsfc(c.wf + c.wfab, c.Fab)) +
+    row('Empuje específico F/ṁ', `${nf(c.F / c.mdot)} N·s/kg`) +
+    row('Relación combustible/aire f', nf(c.f, 4)) +
+    row('Eficiencia térmica (aprox.)', `${nf(etaTh * 100, 1)} %`) +
+    '<i class="sep"></i>' +
+    row('T3 / P3', `${nf(c.T3)} K · ${nf(c.P3 / 1000)} kPa`) +
+    row('T4 (TIT)', `${nf(c.T4)} K`) +
+    row('T5 / EGT de diseño', `${nf(c.T5)} K · ${nf(K2C(c.T5))} °C`) +
+    row('Línea roja de EGT', `${nf(K2C(T.redline))} °C`) +
+    row('NPR de tobera', nf(c.NPR, 2)) +
+    row('Velocidad efectiva del chorro', `${nf(Vj)} m/s`) +
+    row('Margen de surge', `${nf(T.SM * 100)} %`) +
+    row('Consumo a potencia MIL', `${nf(c.wf * 3600)} kg/h`);
+}
+
+function drawTS() {
+  const g = gctx(cvTS); if (!g) return;
+  const { ctx, w, h } = g;
+  ctx.clearRect(0, 0, w, h);
+  const c = T.design;
+  ctx.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+  if (!c.valid || !c.P5) { ctx.fillStyle = '#ff8e9c'; ctx.textAlign = 'center'; ctx.fillText('Diagrama T-s no disponible: ciclo inviable', w / 2, h / 2); return; }
+  const cp = 1100, R = 287;
+  const s = (Tk, Pa) => cp * Math.log(Tk / ATM.T0) - R * Math.log(Pa / ATM.P0);
+  const T9 = c.T5 * Math.pow(ATM.P0 / c.P5, GAS.kh);
+  const T9ab = c.Tab * Math.pow(ATM.P0 / c.P7, GAS.kh);
+  const main = [], ab = [];
+  main.push([s(c.T2, c.P2), c.T2, '2']);
+  main.push([s(c.T3, c.P3), c.T3, '3']);
+  for (let k = 1; k <= 20; k++) { const Tk = lerp(c.T3, c.T4, k / 20), Pk = lerp(c.P3, c.P4, k / 20); main.push([s(Tk, Pk), Tk, k === 20 ? '4' : '']); }
+  main.push([s(c.T5, c.P5), c.T5, '5']);
+  main.push([s(T9, ATM.P0), T9, '9']);
+  const ret = []; for (let k = 0; k <= 20; k++) { const Tk = lerp(T9, c.T2, k / 20); ret.push([s(Tk, ATM.P0), Tk]); }
+  ab.push([s(c.T5, c.P5), c.T5]);
+  for (let k = 1; k <= 16; k++) { const Tk = lerp(c.T5, c.Tab, k / 16), Pk = lerp(c.P5, c.P7, k / 16); ab.push([s(Tk, Pk), Tk, k === 16 ? '7' : '']); }
+  ab.push([s(T9ab, ATM.P0), T9ab]);
+  const all = [...main, ...ab, ...ret];
+  const sMin = Math.min(...all.map(p => p[0])), sMax = Math.max(...all.map(p => p[0]));
+  const tMin = 200, tMax = Math.max(...all.map(p => p[1])) * 1.06;
+  const pl = 38, pr = 12, pt = 14, pb = 26;
+  const X = sv => pl + (sv - sMin) / (sMax - sMin) * (w - pl - pr);
+  const Y = tv => h - pb - (tv - tMin) / (tMax - tMin) * (h - pt - pb);
+  // ejes y rejilla
+  ctx.strokeStyle = 'rgba(62,166,255,.12)'; ctx.lineWidth = 1; ctx.fillStyle = '#5f7aa0'; ctx.textAlign = 'right';
+  for (let tv = 400; tv < tMax; tv += 400) { ctx.beginPath(); ctx.moveTo(pl, Y(tv)); ctx.lineTo(w - pr, Y(tv)); ctx.stroke(); ctx.fillText(nf(tv), pl - 4, Y(tv) + 3); }
+  ctx.textAlign = 'center'; ctx.fillText('s  [J/kg·K]  →', w / 2, h - 8);
+  ctx.save(); ctx.translate(11, h / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('T [K]', 0, 0); ctx.restore();
+  const line = (pts, col, dash, lw = 2) => { ctx.setLineDash(dash || []); ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1]))); ctx.stroke(); ctx.setLineDash([]); };
+  line(ret, 'rgba(124,196,255,.35)', [4, 4], 1.5);
+  line(ab, 'rgba(255,138,42,.75)', [5, 3], 1.5);
+  line(main, '#3ea6ff', null, 2.2);
+  // puntos
+  [...main, ...ab].forEach(p => {
+    if (!p[2]) return;
+    ctx.fillStyle = p[2] === '7' ? '#ff8a2a' : '#dbe7f8';
+    ctx.beginPath(); ctx.arc(X(p[0]), Y(p[1]), 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#9fb6d8'; ctx.textAlign = 'left'; ctx.fillText(p[2], X(p[0]) + 5, Y(p[1]) - 4);
+  });
+  ctx.textAlign = 'left'; ctx.fillStyle = '#ff8a2a'; ctx.fillText('— AB', w - pr - 40, pt + 4);
+}
+
+/* =======================================================================
+   ANUNCIADORES, ESTADO Y GUÍA
+   ======================================================================= */
+const ANN = [
+  ['STARTER', 'ARRAN\u00ADCADOR',       () => S.starter ? 'on' : '',
+    'Arrancador acoplado y girando el carrete. Se apaga solo al llegar a 55 % N1.'],
+  ['IGN',     'IGNICIÓN',          () => S.ign ? 'on' : '',
+    'Ignitores energizados (chasquido audible en la celda). Con la lámpara encendida y el motor en marcha, la ignición es continua.'],
+  ['FUEL',    'VÁLV. COMB.',       () => S.fuel ? 'on' : '',
+    'Válvula de corte de combustible abierta. Con FADEC, la inyección real se inhibe mientras N1 < 12 %.'],
+  ['COMB',    'COMBUS\u00ADTIÓN',        () => S.lit ? 'ok' : '',
+    'Llama establecida en la cámara de combustión (encendido o light-off logrado).'],
+  ['RUN',     'RALENTÍ / MARCHA',  () => S.running ? 'ok' : '',
+    'Motor autosostenido en ralentí (62 % N1) o superior.'],
+  ['AB',      'POST\u00ADQUEMADOR',      () => S.abLit ? 'on' : (S.ab ? 'armed' : ''),
+    'Azul: postquemador encendido. Naranja: armado, en espera del N1 mínimo (92 % con FADEC, 80 % sin FADEC).'],
+  ['FADEC',   'FADEC',             () => S.fadec ? (S.limiting ? 'warn' : 'ok') : 'warn',
+    'Verde: FADEC activo. Ámbar «FADEC LÍM.»: un limitador (EGT o TIT) está recortando el combustible. Ámbar «FADEC APAG.»: modo manual sin protecciones.'],
+  ['SURGE',   'SURGE',             () => S.t - S.lastSurge < 1.2 ? 'alarm' : '',
+    'Pérdida de compresor: el flujo se invierte, se escucha un estampido, cae N1 y sube la EGT. Acción: reducir el acelerador de inmediato.'],
+  ['FLAME',   'FLAME\u00ADOUT',          () => S.flameoutT > 0 ? 'alarm' : '',
+    'Apagado de llama. Con IGNICIÓN y COMBUSTIBLE activos, el motor reenciende si N1 ≥ 12 %.'],
+  ['EGT',     'EGT ALTA',          () => S.overtemp ? 'alarm' : (S.egt > T.redline - 40 ? 'warn' : ''),
+    'Ámbar: EGT a menos de 40 °C de la línea roja. Rojo: sobre la línea roja, la turbina acumula daño térmico.'],
+  ['OSPD',    'SOBRE\u00ADVELOCIDAD',    () => S.overspeed ? 'alarm' : (S.n > 1.0 ? 'warn' : ''),
+    'Ámbar: N1 > 100 %. Rojo: N1 > 105 %, daño por sobrevelocidad (fatiga del disco). Arriba de 116 %: rotura del disco.'],
+  ['HUNG',    'ARRANQUE CAL./COLG.', () => (S.hung > 1.2 || (S.lit && !S.running && S.egt > T.redline - 80)) ? 'alarm' : '',
+    'Arranque colgado (N1 estancado sin llegar a ralentí) o arranque caliente (EGT cercana al límite durante el arranque). El FADEC aborta automáticamente.'],
+  ['TIT',     'LÍMITE TIT',        () => S.creep ? 'alarm' : (S.fadec && T.nT4lim < 1 && S.limiting ? 'warn' : ''),
+    'Rojo: la temperatura de entrada a turbina excede el límite del material (1,850 K) y hay fluencia (creep) en los álabes. Ámbar: el FADEC limita N1 por TIT.'],
+  ['FAIL',    'FALLA MOTOR',       () => S.failed ? 'alarm' : '',
+    'Falla catastrófica de la sección caliente. Usa REINICIAR para instalar un motor nuevo.'],
+];
+const lampEls = {};
+function buildAnnun() {
+  const host = $('annun');
+  ANN.forEach(([id, txt]) => {
+    const d = document.createElement('button');
+    d.type = 'button'; d.className = 'lamp'; d.textContent = txt;
+    d.dataset.info = 'lamp:' + id;
+    d.setAttribute('aria-label', txt.replace(/­/g, '') + ': ver información');
+    host.appendChild(d); lampEls[id] = d;
+  });
+}
+function updateAnnun() {
+  ANN.forEach(([id, , f]) => {
+    const st = f(), el = lampEls[id], cls = 'lamp' + (st ? ' ' + st : '');
+    if (el.className !== cls) el.className = cls;
+  });
+  lampEls.FADEC.textContent = S.fadec ? (S.limiting ? 'FADEC LÍM.' : 'FADEC') : 'FADEC APAG.';
+}
+
+function statusInfo() {
+  if (S.failed) return ['FALLA DE MOTOR', 'alarm'];
+  if (S.t - S.lastSurge < 1.2) return ['SURGE', 'alarm'];
+  if (S.flameoutT > 0) return ['FLAMEOUT', 'alarm'];
+  if (S.abLit) return ['POSTQUEMADOR', 'ab'];
+  if (S.running) return S.n > 0.975 ? ['POTENCIA MIL', 'ok'] : (S.n < P.nIdle + 0.03 ? ['RALENTÍ', 'ok'] : ['EN MARCHA', 'ok']);
+  if (S.lit) return ['ARRANCANDO', 'warn'];
+  if (S.starter) return ['MOTOREO', 'info'];
+  if (S.n > 0.02) return ['DESACELERANDO', 'info'];
+  return ['APAGADO', ''];
+}
+
+function hintInfo() {
+  const pct = nf(S.n * 100) + ' %';
+  if (S.failed) return ['Motor destruido. Pulsa REINICIAR para montar un motor nuevo en la celda.', 'alarm', null];
+  if (!S.lit) {
+    if (S.flameoutT > 0 && S.n > 0.2) return [`Flameout: activa IGNICIÓN con COMBUSTIBLE abierto para reencender (N1 ${pct})`, 'alarm', S.ign ? 'btnFuel' : 'btnIgn'];
+    if (S.n < P.nLight) {
+      if (!S.starter) return ['Paso 1 · Activa el ARRANCADOR para girar el carrete', '', 'btnStarter'];
+      return [`Motoreando… N1 ${pct} (se necesita ≥ 12 % para el encendido)`, '', S.ign ? null : 'btnIgn'];
+    }
+    if (!S.ign) return ['Paso 2 · Activa la IGNICIÓN (ignitores)', '', 'btnIgn'];
+    if (!S.fuel) return ['Paso 3 · Abre COMBUSTIBLE para el encendido (light-off)', '', 'btnFuel'];
+    return ['Esperando encendido…', '', null];
+  }
+  if (!S.running) {
+    if (S.starter) return [`Encendido logrado · arrancador y combustión acelerando hacia ralentí (N1 ${pct})`, '', null];
+    if (S.n < P.nSelf) return ['¡Arrancador desconectado abajo de 45 % N1! Riesgo de arranque colgado', 'alarm', 'btnStarter'];
+    return [`Autosostenido · acelerando a ralentí (N1 ${pct})`, '', null];
+  }
+  if (S.ign) return ['Motor estable. Puedes apagar la IGNICIÓN (o dejarla para reencendido automático)', '', null];
+  if (!S.fadec) return ['FADEC APAGADO: control manual sin protecciones. Mueve el acelerador con suavidad', 'alarm', null];
+  if (S.thr < 0.9) return ['Avanza el ACELERADOR · El postquemador enciende arriba de 92 % N1', '', null];
+  if (!S.ab) return ['Potencia militar · Activa el POSTQUEMADOR', '', 'btnAB'];
+  return ['Prueba en curso · Cierra COMBUSTIBLE para apagar el motor', '', null];
+}
+
+/* =======================================================================
+   CONTROLES
+   ======================================================================= */
+const btn = { starter: $('btnStarter'), ign: $('btnIgn'), fuel: $('btnFuel'), ab: $('btnAB'), fadec: $('btnFADEC') };
+function syncButtons() {
+  for (const k in btn) btn[k].setAttribute('aria-pressed', String(!!S[k]));
+}
+function firstGesture() {
+  if (!ui.userMuted && !AudioEngine.isOn()) { if (AudioEngine.setEnabled(true)) updateAudioBtn(); }
+}
+function toggle(key) {
+  firstGesture();
+  if (S.failed && key !== 'fadec') { log('Motor dañado: pulsa REINICIAR antes de operar', 'warn'); return; }
+  S[key] = !S[key];
+  const on = S[key];
+  const msgs = {
+    starter: on ? (S.n >= P.starterCut ? null : 'Arrancador acoplado: motoreando el carrete') : 'Arrancador desacoplado',
+    ign: on ? 'Ignición ACTIVADA: ignitores energizados' : 'Ignición DESACTIVADA',
+    fuel: on ? 'Válvula de combustible ABIERTA' : 'Válvula de combustible CERRADA',
+    ab: on ? (S.running && S.n >= (S.fadec ? 0.92 : 0.8) ? 'Postquemador: secuencia de encendido' : `Postquemador ARMADO: enciende arriba de ${S.fadec ? 92 : 80} % N1`) : 'Postquemador desactivado',
+    fadec: on ? 'FADEC ACTIVADO: control digital con protecciones' : 'FADEC DESACTIVADO: control hidromecánico manual — SIN protecciones contra surge, sobretemperatura ni sobrevelocidad'
+  };
+  if (msgs[key]) log(msgs[key], key === 'fadec' && !on ? 'warn' : 'info');
+  if (key === 'starter' && on && S.n >= P.starterCut) { S.starter = false; log('Arrancador no disponible arriba de 55 % N1', 'info'); }
+  syncButtons();
+}
+btn.starter.addEventListener('click', () => toggle('starter'));
+btn.ign.addEventListener('click', () => toggle('ign'));
+btn.fuel.addEventListener('click', () => toggle('fuel'));
+btn.ab.addEventListener('click', () => toggle('ab'));
+btn.fadec.addEventListener('click', () => toggle('fadec'));
+$('btnReset').addEventListener('click', () => {
+  firstGesture();
+  resetState(); fx.length = 0; syncButtons();
+  log('REINICIO: motor de prueba nuevo instalado en la celda', 'ok');
+});
+
+const thrEl = $('throttle');
+function setThrottle(v) {
+  v = clamp(Math.round(v), 0, 100);
+  thrEl.value = v; S.thr = v / 100;
+  thrEl.style.setProperty('--p', v + '%');
+}
+thrEl.addEventListener('input', () => { firstGesture(); setThrottle(+thrEl.value); });
+
+function updateAudioBtn() {
+  const on = AudioEngine.isOn();
+  $('btnAudio').textContent = on ? 'SONIDO: SÍ' : 'SONIDO: NO';
+  $('btnAudio').setAttribute('aria-pressed', String(on));
+}
+$('btnAudio').addEventListener('click', () => {
+  const on = !AudioEngine.isOn();
+  ui.userMuted = !on;
+  if (!AudioEngine.setEnabled(on)) log('Web Audio API no disponible en este navegador', 'warn');
+  updateAudioBtn();
+});
+$('btnUnits').addEventListener('click', () => {
+  ui.units = ui.units === 'SI' ? 'IMP' : 'SI';
+  $('btnUnits').textContent = ui.units === 'SI' ? 'SI' : 'IMP';
+});
+function openDesign(o) { $('design').classList.toggle('open', o); $('scrim').classList.toggle('show', o); }
+$('btnDesign').addEventListener('click', () => openDesign(true));
+$('btnDesignClose').addEventListener('click', () => openDesign(false));
+$('scrim').addEventListener('click', () => openDesign(false));
+$('btnDefaults').addEventListener('click', () => { design = defaultDesign(); buildDesignUI(); applyDesign(design); });
+$('btnClearLog').addEventListener('click', () => { logEl.innerHTML = ''; lastLog = null; });
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && popKey) { closeInfo(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.matches('input, select, textarea') && !(e.target === thrEl && /^[123pdrmh]$/i.test(e.key))) return;
+  const k = e.key.toLowerCase();
+  if (k === '1') toggle('starter');
+  else if (k === '2') toggle('ign');
+  else if (k === '3') toggle('fuel');
+  else if (k === 'p') toggle('ab');
+  else if (k === 'd') toggle('fadec');
+  else if (k === 'r') $('btnReset').click();
+  else if (k === 'm') $('btnAudio').click();
+  else if (k === 'h') setInfoMode(!document.body.classList.contains('info-on'));
+  else if (k === 'arrowup' || k === 'arrowright') { setThrottle(+thrEl.value + 5); e.preventDefault(); }
+  else if (k === 'arrowdown' || k === 'arrowleft') { setThrottle(+thrEl.value - 5); e.preventDefault(); }
+});
+
+/* Altura del deck → padding inferior del layout */
+const deckRO = new ResizeObserver(() => document.documentElement.style.setProperty('--deck-h', $('deck').offsetHeight + 'px'));
+deckRO.observe($('deck'));
+
+/* =======================================================================
+   ACTUALIZACIÓN DE PANELES (DOM) — sólo cuando cambian
+   ======================================================================= */
+const prev = {};
+function updateDOM() {
+  const [st, cls] = statusInfo();
+  const pill = $('statusPill');
+  if (prev.st !== st + cls) { pill.textContent = st; pill.className = 'pill ' + cls; prev.st = st + cls; }
+
+  const [hint, hcls, next] = hintInfo();
+  if (prev.hint !== hint) { $('hint').textContent = hint; $('hint').className = 'hint ' + hcls; prev.hint = hint; }
+  if (prev.next !== next) {
+    document.querySelectorAll('.sw.next').forEach(b => b.classList.remove('next'));
+    if (next) $(next).classList.add('next');
+    prev.next = next;
+  }
+
+  const integ = 100 - S.damage;
+  $('intVal').textContent = nf(integ) + ' %';
+  const bar = $('intBar'); bar.firstElementChild.style.width = integ + '%';
+  bar.className = 'bar' + (integ < 35 ? ' low' : integ < 70 ? ' mid' : '');
+  $('kvR').textContent = S.running ? nf(S.r, 2) : '—';
+  const smLeft = (T.SM * (1 - S.damage / 200) - S.abPulse) - (S.running ? S.r - 1 : 0);
+  $('kvSM').textContent = nf((S.running ? smLeft : T.SM) * 100) + ' %';
+  $('kvSurge').textContent = nf(S.surgeCount);
+  $('kvAB').textContent = S.abLit ? 'ENCENDIDO' : (S.ab ? 'ARMADO' : 'APAGADO');
+  $('clock').textContent = fmtT(S.t);
+
+  const out = $('thrOut'), v = +thrEl.value;
+  const txt = S.abLit ? 'MÁX. AB' : v === 0 ? 'RALENTÍ' : v === 100 ? 'MIL' : v + ' %';
+  if (out.textContent !== txt) out.textContent = txt;
+  out.classList.toggle('ab', S.abLit);
+
+  // Avisos con flanco (una sola entrada por evento)
+  edge('overtemp', S.overtemp, 'EGT SOBRE LÍNEA ROJA: daño térmico en la turbina', 'alarm');
+  edge('overspeed', S.overspeed, 'SOBREVELOCIDAD: N1 > 105 %', 'alarm');
+  edge('creep', S.creep, 'TIT sobre límite de material: fluencia (creep) en álabes', 'warn');
+  edge('lim', S.fadec && S.limiting && S.running, 'FADEC: limitador activo (EGT/TIT)', 'info');
+  edge('dmg50', S.damage > 50, 'Integridad de turbina < 50 %: vibración elevada', 'warn');
+  updateAnnun();
+}
+function edge(key, val, msg, lvl) { if (val && !prev[key]) log(msg, lvl); prev[key] = val; }
+
+/* =======================================================================
+   BUCLE PRINCIPAL
+   ======================================================================= */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  const sub = 4;
+  for (let i = 0; i < sub; i++) step(dt / sub);
+  AudioEngine.update(S, dt);
+  drawInstruments();
+  drawEngine(dt);
+  updateDOM();
+  updateHotspots();
+  if (popKey && now - popLiveT > 250) { popLiveT = now; renderLive(); }
+  requestAnimationFrame(frame);
+}
+
+/* =======================================================================
+   PUNTOS DE INFORMACIÓN — fichas técnicas para técnicos en formación
+   Cada ficha: tag (categoría), t (título), b (contenido HTML) y
+   live() opcional → filas [etiqueta, valor] actualizadas en tiempo real.
+   ======================================================================= */
+const cycNow = () => cycle(design, Math.max(S.n, 0.05));
+const onOff = v => v ? 'ACTIVO' : 'INACTIVO';
+const kPa = pa => nf(pa / 1000, 1) + ' kPa';
+const degC = k => nf(K2C(k)) + ' °C';
+
+const INFO = {
+  guia: { tag: 'Guía de operación', t: 'Cómo usar la celda de pruebas', b: `
+    <h5>Arranque normal</h5>
+    <ol>
+      <li><b>ARRANCADOR</b>: gira el carrete. Espera a que N1 llegue a 12 % o más.</li>
+      <li><b>IGNICIÓN</b>: energiza los ignitores (se escuchan chasquidos).</li>
+      <li><b>COMBUSTIBLE</b>: abre la válvula. Observa el encendido (light-off) y el pico de EGT.</li>
+      <li>El arrancador se desacopla solo a 55 % y el motor se estabiliza en <b>ralentí (62 % N1)</b>.</li>
+      <li>Apaga la IGNICIÓN y avanza el ACELERADOR.</li>
+    </ol>
+    <h5>Apagado normal</h5>
+    <p>Lleva el acelerador a ralentí, espera a que la EGT se estabilice y cierra COMBUSTIBLE. El carrete desacelera solo.</p>
+    <h5>Límites del diseño base</h5>
+    <ul>
+      <li>N1 máximo continuo: 100 %. Sobrevelocidad: más de 105 %.</li>
+      <li>Línea roja de EGT: ≈ 977 °C (cambia con la Oficina de diseño).</li>
+      <li>Postquemador: N1 ≥ 92 % con FADEC.</li>
+    </ul>
+    <h5>Ejercicios de fallas sugeridos</h5>
+    <ul>
+      <li><b>Arranque caliente:</b> con FADEC apagado, abre COMBUSTIBLE sin IGNICIÓN unos segundos y luego activa la ignición.</li>
+      <li><b>Arranque colgado:</b> apaga el ARRANCADOR antes de 45 % N1.</li>
+      <li><b>Surge:</b> con FADEC apagado, lleva el acelerador de ralentí a máximo de golpe.</li>
+      <li><b>Flameout:</b> con FADEC apagado, corta el acelerador de máximo a ralentí de golpe; reenciende con IGNICIÓN.</li>
+      <li><b>Sobretemperatura:</b> con FADEC apagado, enciende el postquemador a potencia máxima.</li>
+    </ul>
+    <h5>Teclado</h5>
+    <p><b>1</b> arrancador · <b>2</b> ignición · <b>3</b> combustible · <b>↑ ↓</b> acelerador · <b>P</b> postquemador · <b>D</b> FADEC · <b>R</b> reiniciar · <b>M</b> sonido · <b>H</b> mostrar/ocultar puntos de información · <b>Esc</b> cerrar ficha</p>
+    <p class="note">Modelo didáctico 0D: los valores son representativos y no corresponden a un motor certificado específico. No sustituye el manual de mantenimiento (AMM) ni los procedimientos del fabricante.</p>` },
+
+  /* ---------------- Instrumentos ---------------- */
+  n1: { tag: 'Instrumento', t: 'N1 · velocidad del carrete', b: `
+    <p>Velocidad del rotor compresor–turbina expresada como porcentaje de la velocidad de diseño (100 % = 10,400 rpm en este motor). En un turborreactor de un solo eje es el parámetro principal de empuje.</p>
+    <h5>Valores de referencia</h5>
+    <ul><li>Encendido (light-off): N1 ≥ 12 %</li><li>Autosostenimiento: ≈ 45 %</li><li>Desacople del arrancador: 55 %</li><li>Ralentí: 62 % · Potencia MIL: 100 %</li></ul>
+    <h5>Arcos del indicador</h5>
+    <p>Verde 62 – 100 % · ámbar 100 – 105 % · rojo &gt; 105 % (sobrevelocidad: fatiga del disco; arriba de 116 %, rotura).</p>
+    <p class="tip">En taller: N1 que no sube durante el arranque = arranque colgado. N1 que cae mientras la EGT sube = surge o pérdida de compresor.</p>`,
+    live: () => [['N1', nf(S.n * 100, 1) + ' %'], ['Velocidad', nf(S.n * 10400) + ' rpm'], ['Régimen', statusInfo()[0]], ['Arrancador', S.starter ? 'acoplado' : 'desacoplado']] },
+
+  egt: { tag: 'Instrumento', t: 'EGT · temperatura de gases de escape', b: `
+    <p>Temperatura de los gases a la salida de la turbina (estación 5). En motores reales se mide con un arnés de termopares. Es el indicador indirecto de la TIT, que no se mide directamente porque es demasiado alta para los sensores.</p>
+    <h5>Valores de referencia (diseño base)</h5>
+    <ul><li>Ralentí ≈ 425 °C · potencia MIL ≈ 935 °C</li><li>Pico normal durante el arranque ≈ 600 °C</li><li>Línea roja = EGT de diseño + 40 °C ≈ 977 °C</li></ul>
+    <h5>Qué vigilar</h5>
+    <ul><li>Pico de arranque cercano a la línea roja → arranque caliente (el FADEC aborta a 60 °C de la línea roja).</li><li>EGT alta con N1 normal → turbina dañada o compresor sucio (pérdida de <b>margen de EGT</b>).</li><li>Sobre la línea roja la turbina acumula daño proporcional al exceso.</li></ul>`,
+    live: () => [['EGT actual', degC(S.egt)], ['Línea roja', degC(T.redline)], ['Margen a la línea roja', nf(T.redline - S.egt) + ' °C'], ['EGT de equilibrio a este N1', degC(look(T.egt, S.n))]] },
+
+  thrust: { tag: 'Instrumento', t: 'Empuje neto', b: `
+    <p>Fuerza que el motor ejerce sobre el banco de pruebas. En celda estática no hay velocidad de vuelo, así que no hay arrastre de admisión.</p>
+    <span class="f">F = ṁ·(1 + f)·V9 + A9·(P9 − P0)</span>
+    <p>El segundo término (empuje de presión) sólo existe con tobera convergente bloqueada.</p>
+    <h5>Valores de referencia (diseño base)</h5>
+    <ul><li>Ralentí ≈ 9.8 kN · MIL ≈ 72 kN · con postquemador ≈ 94 kN</li><li>Conversión: 1 kN = 224.8 lbf</li></ul>
+    <p class="tip">Empuje bajo con N1 normal indica pérdida de eficiencia de componentes (daño, suciedad). El botón SI / IMP cambia las unidades.</p>`,
+    live: () => [['Empuje', nf(S.F / 1000, 2) + ' kN'], ['Empuje', nf(S.F * N_TO_LBF) + ' lbf'], ['Respecto a MIL', T.design.valid ? nf(S.F / T.design.F * 100, 1) + ' %' : '—'], ['Postquemador', nf(S.abLevel * 100) + ' %']] },
+
+  fuel: { tag: 'Instrumento', t: 'Flujo de combustible y TSFC', b: `
+    <p><b>Flujo de combustible</b>: masa de combustible que entra a las cámaras (y al postquemador) por hora.</p>
+    <p><b>TSFC</b> (consumo específico de combustible por empuje): combustible necesario por unidad de empuje. Mide la eficiencia global del motor: <b>menor es mejor</b>.</p>
+    <span class="f">TSFC = ṁf / F</span>
+    <h5>Valores de referencia</h5>
+    <ul><li>Seco a MIL: ≈ 28 g/kN·s (≈ 1.0 lb/lbf·h)</li><li>Con postquemador: casi el doble, porque el combustible se quema a baja presión.</li></ul>
+    <p class="tip">Un flujo que no corresponde al N1 indica un transitorio (relación r distinta de 1): el motor está acelerando o desacelerando.</p>`,
+    live: () => [['Flujo', nf(S.wfTot * 3600) + ' kg/h'], ['Flujo', nf(S.wfTot * 3600 * KG_TO_LB) + ' lb/h'], ['TSFC', S.tsfc > 0 ? nf(S.tsfc * 1e6, 1) + ' g/kN·s' : '—'], ['TSFC', S.tsfc > 0 ? nf(S.tsfc * TSFC_SI_TO_IMP, 2) + ' lb/lbf·h' : '—']] },
+
+  integridad: { tag: 'Diagnóstico', t: 'Integridad de turbina', b: `
+    <p>Vida remanente simulada de la sección caliente. A 0 % ocurre una falla catastrófica.</p>
+    <h5>La reducen</h5>
+    <ul><li>EGT sobre la línea roja (daño proporcional al exceso).</li><li>Sobrevelocidad (N1 &gt; 105 %).</li><li>Cada surge (más severo sin FADEC).</li><li>Fluencia (creep) cuando la TIT supera 1,850 K.</li></ul>
+    <h5>Efectos</h5>
+    <p>Menos empuje y más EGT al mismo N1 (pérdida de margen de EGT), menor margen de surge y vibración audible.</p>
+    <p class="tip">En servicio real esto se vigila con tendencias de monitoreo de condición (ECM) e inspecciones boroscópicas.</p>`,
+    live: () => [['Integridad', nf(100 - S.damage, 1) + ' %'], ['Surges registrados', nf(S.surgeCount)], ['Sobretemperatura', S.overtemp ? 'SÍ' : 'no'], ['Sobrevelocidad', S.overspeed ? 'SÍ' : 'no'], ['Fluencia (creep)', S.creep ? 'SÍ' : 'no']] },
+
+  r: { tag: 'Control', t: 'Relación de combustible r', b: `
+    <p>Compara el combustible que entra con el que el motor necesita para mantenerse estable al N1 actual.</p>
+    <span class="f">r = ṁf real / ṁf de equilibrio(N1)</span>
+    <ul><li><b>r = 1</b>: régimen estable.</li><li><b>r &gt; 1</b>: exceso de energía, el carrete acelera.</li><li><b>r &lt; 1</b>: déficit, el carrete desacelera.</li></ul>
+    <h5>Límites</h5>
+    <ul><li>r &gt; 1 + margen de surge → <b>surge</b>.</li><li>r &lt; 0.38 → <b>apagado por mezcla pobre</b> (flameout).</li></ul>
+    <p>El FADEC mantiene r entre 0.62 y 1 + 0.65·SM: son sus programas de aceleración y deceleración.</p>`,
+    live: () => [['r actual', S.running ? nf(S.r, 2) : '—'], ['Límite de surge', nf(1 + T.SM * (1 - S.damage / 200) - S.abPulse, 2)], ['Límite pobre', nf(P.leanLimit, 2)], ['Modo', S.fadec ? 'FADEC' : 'manual']] },
+
+  sm: { tag: 'Control', t: 'Margen de surge', b: `
+    <p>Distancia entre la línea de operación del compresor y su línea de surge en el mapa del compresor. Indica cuánto exceso de combustible tolera el motor antes de que el flujo se invierta.</p>
+    <span class="f">SM ≈ 0.22 + 6.5 / π_c</span>
+    <h5>Lo reducen</h5>
+    <ul><li>Mayor relación de presión de diseño.</li><li>Daño acumulado en el motor.</li><li>Encender el postquemador sin programación de tobera (sin FADEC).</li><li>Aceleraciones bruscas, que consumen margen de forma temporal.</li></ul>`,
+    live: () => [['Margen de diseño', nf(T.SM * 100) + ' %'], ['Margen efectivo', nf((T.SM * (1 - S.damage / 200) - S.abPulse) * 100) + ' %'], ['Consumido por el transitorio', S.running ? nf(Math.max(0, S.r - 1) * 100) + ' %' : '—']] },
+
+  /* ---------------- Celda y secciones del motor ---------------- */
+  celda: { tag: 'Celda de pruebas', t: 'Vista en corte del motor', b: `
+    <p>Banco estático en condiciones ISA a nivel del mar: 15 °C y 101.3 kPa. El motor está sujeto a los montantes del banco y no hay velocidad de vuelo.</p>
+    <h5>Numeración de estaciones (SAE ARP755)</h5>
+    <ul><li><b>0</b> ambiente · <b>2</b> entrada al compresor · <b>3</b> salida del compresor</li><li><b>4</b> entrada a la turbina · <b>5</b> salida de la turbina</li><li><b>7</b> postquemador · <b>9</b> salida de la tobera</li></ul>
+    <p class="tip">Toca los puntos ⓘ sobre el motor para ver cada sección con sus datos en vivo.</p>` },
+
+  h_inlet: { tag: 'Sección 0 → 2', t: 'Admisión', b: `
+    <p>Conduce el aire hacia el compresor con la menor pérdida de presión y un flujo uniforme. En la celda incluye una campana de admisión (bellmouth) y, normalmente, una rejilla de protección.</p>
+    <h5>Qué vigilar en el taller</h5>
+    <ul><li>Daño por objetos extraños (FOD): inspeccionar antes de cada corrida.</li><li>Distorsión del flujo: reduce el margen de surge.</li><li>Abolladuras en el labio de admisión: reducen la recuperación de presión π_d.</li></ul>`,
+    live: () => { const c = cycNow(); return [['Flujo de aire', nf(c.mdot, 1) + ' kg/s'], ['P2', kPa(c.P2)], ['T2', degC(c.T2)], ['Recuperación π_d', nf(design.inletRec, 3)]]; } },
+
+  h_comp: { tag: 'Sección 2 → 3', t: 'Compresor axial', b: `
+    <p>Compresor axial de 9 etapas, cada una con un rotor que acelera el aire y un estator que lo difunde y eleva la presión. Consume la mayor parte del trabajo que produce la turbina.</p>
+    <span class="f">Wc = cp·(T3 − T2)</span>
+    <h5>Fallas típicas</h5>
+    <ul><li><b>Surge</b>: inversión total del flujo, con estampido y llamarada en la admisión.</li><li><b>Pérdida rotativa (stall)</b>: zonas de flujo desprendido que giran con el rotor.</li><li>Suciedad o erosión: baja la η_c y sube la EGT.</li></ul>`,
+    live: () => { const c = cycNow(); return [['Relación de presión', nf(c.PR, 2) + ' : 1'], ['T3', degC(c.T3)], ['P3', kPa(c.P3)], ['Trabajo específico', nf(c.Wc / 1000) + ' kJ/kg'], ['Potencia absorbida', nf(c.mdot * c.Wc / 1e6, 2) + ' MW']]; } },
+
+  h_comb: { tag: 'Sección 3 → 4', t: 'Cámara de combustión', b: `
+    <p>Cámara anular con inyectores y ignitores. Aquí se mezcla el combustible con el aire comprimido y se quema a presión casi constante para elevar la temperatura hasta la TIT.</p>
+    <h5>Conceptos clave</h5>
+    <ul><li><b>Encendido (light-off)</b>: requiere chispa, combustible y flujo de aire suficiente (N1 ≥ 12 %).</li><li><b>Límite pobre</b>: con muy poco combustible la llama se apaga (flameout).</li><li><b>Pérdida de presión Δp/p</b>: necesaria para la mezcla y el enfriamiento del liner.</li></ul>
+    <p class="tip">En inspección: busca puntos calientes en el liner, grietas y coquización de inyectores.</p>`,
+    live: () => { const c = cycNow(); return [['Llama', S.lit ? 'ESTABLECIDA' : 'apagada'], ['Relación f/a', c.f ? nf(c.f, 4) : '—'], ['Flujo de combustible', nf(S.wf * 3600) + ' kg/h'], ['T4 programada', nf(c.T4) + ' K']]; } },
+
+  h_turb: { tag: 'Sección 4 → 5', t: 'Turbina', b: `
+    <p>Turbina axial de 3 etapas. Extrae del gas caliente el trabajo necesario para mover al compresor, que comparte el mismo eje.</p>
+    <span class="f">(1 + f)·cp_h·(T4 − T5)·η_m = Wc</span>
+    <h5>Límites y daño</h5>
+    <ul><li>Los álabes trabajan arriba de su temperatura de fusión gracias al enfriamiento interno.</li><li>Arriba de 1,850 K de TIT aparece la fluencia (creep): los álabes se alargan y pueden rozar la carcasa.</li><li>La sobretemperatura quema los bordes de ataque y la sobrevelocidad fatiga el disco.</li></ul>`,
+    live: () => { const c = cycNow(); return [['T4 (TIT)', nf(c.T4) + ' K'], ['T5 (EGT)', degC(S.egt)], ['Caída de temperatura', c.T5 ? nf(c.T4 - c.T5) + ' K' : '—'], ['Integridad', nf(100 - S.damage, 1) + ' %']]; } },
+
+  h_noz: { tag: 'Sección 5 → 9', t: 'Tobera de escape', b: `
+    <p>Convierte la presión y temperatura restantes del gas en velocidad del chorro, que es lo que produce el empuje.</p>
+    <ul><li><b>Convergente</b>: con NPR &gt; 1.85 la garganta se bloquea (Mach 1). El exceso de presión sale como empuje de presión.</li><li><b>Convergente-divergente</b>: expande el gas hasta la presión ambiente; es más eficiente con NPR alta.</li><li><b>Área variable A9</b>: el FADEC la abre al encender el postquemador.</li></ul>`,
+    live: () => { const c = cycNow(); return [['NPR', c.NPR ? nf(c.NPR, 2) : '—'], ['Velocidad efectiva', c.V ? nf(c.V) + ' m/s' : '—'], ['Área A9', nf(100 + nozOpen * 45) + ' %'], ['Tipo', NOZ_TYPES[design.nozType]]]; } },
+
+  h_ab: { tag: 'Sección 5 → 7', t: 'Postquemador (reheat)', b: `
+    <p>Inyecta combustible adicional en el escape, aprovechando el oxígeno que no se usó en la cámara principal, para aumentar mucho el empuje a costa de un consumo muy alto.</p>
+    <h5>Programación de tobera</h5>
+    <p>Al encender, el volumen de gas crece y la tobera debe <b>abrir A9</b>. Si no abre, sube la contrapresión sobre la turbina: aumenta la EGT y se reduce el margen de surge (pico de contrapresión). El FADEC lo hace automáticamente; en modo manual no.</p>
+    <p>Enciende arriba de 92 % N1 con FADEC y de 80 % sin FADEC.</p>`,
+    live: () => { const c = T.design; return [['Estado', S.abLit ? 'ENCENDIDO' : (S.ab ? 'ARMADO' : 'apagado')], ['T7 de diseño', nf(design.Tab) + ' K'], ['Ganancia en diseño', c.valid ? '+' + nf((c.Fab / c.F - 1) * 100) + ' %' : '—'], ['Combustible del postquemador', nf(S.abLevel * look(T.wfab, S.n) * 3600) + ' kg/h']]; } },
+
+  /* ---------------- Controles ---------------- */
+  starter: { tag: 'Control · paso 1', t: 'Arrancador', b: `
+    <p>Motor de arranque (eléctrico o neumático) que gira el carrete para que el compresor mueva aire antes de la combustión.</p>
+    <ul><li>Por sí solo lleva el carrete a ≈ 27 % N1 (<b>motoreo en seco</b>). Sirve para purgar el combustible acumulado después de un arranque húmedo.</li><li>Se desacopla automáticamente a 55 % N1.</li><li>Si lo apagas antes de 45 % N1, el motor no puede autosostenerse: <b>arranque colgado</b>.</li></ul>`,
+    live: () => [['Arrancador', S.starter ? 'ACOPLADO' : 'desacoplado'], ['N1', nf(S.n * 100, 1) + ' %'], ['Desacople automático', '55 %']] },
+
+  ign: { tag: 'Control · paso 2', t: 'Ignición', b: `
+    <p>Ignitores de alta energía en la cámara de combustión. En la celda se escucha el chasquido de las chispas.</p>
+    <ul><li>Necesaria para el encendido (light-off).</li><li>Si la dejas activa con el motor en marcha funciona como <b>ignición continua</b>: el motor reenciende solo tras un flameout. En operación real se usa con lluvia intensa, hielo o turbulencia.</li></ul>
+    <p class="tip">En motores reales se apaga después de estabilizar el motor para conservar la vida útil de los ignitores.</p>`,
+    live: () => [['Ignición', onOff(S.ign)], ['Combustión', S.lit ? 'establecida' : 'sin llama']] },
+
+  fuel_btn: { tag: 'Control · paso 3', t: 'Válvula de combustible', b: `
+    <p>Válvula de corte de alta presión. Ábrela con N1 ≥ 12 % y la ignición activa.</p>
+    <ul><li>Con FADEC: la inyección se inhibe automáticamente mientras N1 &lt; 12 %.</li><li>Sin FADEC: el combustible sin llama se acumula en la cámara (<b>arranque húmedo</b>). Al encender provoca un <b>arranque caliente</b>, con un pico de EGT.</li><li>Cerrar la válvula es el apagado normal del motor.</li></ul>`,
+    live: () => [['Válvula', S.fuel ? 'ABIERTA' : 'cerrada'], ['Flujo', nf(S.wfTot * 3600) + ' kg/h'], ['Combustible acumulado', nf(S.puddle, 1) + ' s']] },
+
+  throttle: { tag: 'Control', t: 'Acelerador (palanca de potencia)', b: `
+    <ul><li><b>Con FADEC</b>: la palanca pide un N1 (ralentí 62 % → MIL 100 %). El FADEC dosifica el combustible respetando sus programas de aceleración y sus limitadores.</li><li><b>Sin FADEC</b>: la palanca abre la válvula de combustible directamente. Movimientos de más de ≈ 30 % de golpe provocan surge y los cortes bruscos provocan flameout. Puede llegar a 106 % N1.</li></ul>
+    <p class="tip">Teclado: ↑ ↓ en pasos de 5 %.</p>`,
+    live: () => [['Posición', nf(S.thr * 100) + ' %'], ['N1 solicitado', nf((P.nIdle + ((S.fadec ? 1 : P.nMaxManual) - P.nIdle) * S.thr) * 100, 1) + ' %'], ['N1 real', nf(S.n * 100, 1) + ' %'], ['Modo', S.fadec ? 'FADEC' : 'manual']] },
+
+  ab_btn: { tag: 'Control', t: 'Interruptor del postquemador', b: `
+    <p>Arma el postquemador. Enciende cuando N1 supera el mínimo (92 % con FADEC, 80 % sin FADEC), tras una demora de ≈ 0.4 s.</p>
+    <ul><li>Aumenta el empuje ≈ 30 % en el diseño base.</li><li>El consumo casi se duplica.</li><li>Sin FADEC, la tobera no abre: sube la EGT ≈ 70 °C y hay riesgo de surge al encender.</li></ul>`,
+    live: () => [['Interruptor', onOff(S.ab)], ['Postquemador', S.abLit ? 'ENCENDIDO' : 'apagado'], ['N1 mínimo', S.fadec ? '92 %' : '80 %'], ['Empuje', nf(S.F / 1000, 1) + ' kN']] },
+
+  fadec: { tag: 'Control', t: 'FADEC · control digital de autoridad total', b: `
+    <p>Computadora que controla el motor por completo. Funciones simuladas:</p>
+    <ul><li>Gobernador de N1 según la posición del acelerador.</li><li>Programas de aceleración y deceleración (evitan surge y flameout).</li><li>Limitadores de EGT y de TIT.</li><li>Protección de arranque: inhibe la inyección abajo de 12 % y aborta arranques calientes o colgados.</li><li>Recuperación de surge y programación de la tobera del postquemador.</li></ul>
+    <p class="note">Apagarlo simula un control hidromecánico manual sin protecciones. Úsalo para practicar el reconocimiento de fallas.</p>`,
+    live: () => [['FADEC', onOff(S.fadec)], ['Limitador activo', S.fadec && S.limiting ? 'SÍ' : 'no'], ['Límite de N1 por TIT', nf(T.nT4lim * 100) + ' %']] },
+
+  reset: { tag: 'Control', t: 'Reiniciar', b: `
+    <p>Retira el motor de la celda e instala uno nuevo con integridad de 100 %. Conserva el diseño actual de la Oficina de diseño y el modo FADEC.</p>` },
+
+  /* ---------------- Paneles ---------------- */
+  anunciadores: { tag: 'Panel', t: 'Panel de anunciadores', b: `
+    <p>Lámparas de estado y alarma, como en la consola de una celda de pruebas real. Toca cualquier lámpara para ver qué significa.</p>
+    <h5>Código de colores</h5>
+    <p><span class="lamp mini on">AZUL</span> sistema activo</p>
+    <p><span class="lamp mini ok">VERDE</span> condición normal</p>
+    <p><span class="lamp mini armed">NARANJA</span> armado o en espera</p>
+    <p><span class="lamp mini warn">ÁMBAR</span> precaución</p>
+    <p><span class="lamp mini alarm">ROJO</span> alarma (intermitente)</p>` },
+
+  bitacora: { tag: 'Panel', t: 'Bitácora de prueba', b: `
+    <p>Registro cronológico de la corrida. El tiempo T+mm:ss cuenta desde que se abrió la celda.</p>
+    <ul><li>Los mensajes repetidos se agrupan con un contador (×n).</li><li>Colores: verde = evento normal, ámbar = precaución, rojo = alarma.</li></ul>
+    <p class="tip">Úsala para redactar el reporte de la corrida: secuencia de arranque, tiempos y fallas observadas.</p>` },
+
+  disenio: { tag: 'Oficina de diseño', t: 'Modelo termodinámico del ciclo Brayton', b: `
+    <p>Modelo 0D (sin dimensiones geométricas): calcula cada estación con relaciones isentrópicas corregidas por eficiencias.</p>
+    <ul><li>Aire frío: γ = 1.4, cp = 1,005 J/kg·K.</li><li>Gases calientes: γ = 1.333, cp = 1,148 J/kg·K.</li><li>Poder calorífico del combustible: 43 MJ/kg.</li><li>Fuera de diseño: ṁ ∝ N^2.8, π_c − 1 ∝ N^2.2 y la T4 sigue una programación en función de N.</li></ul>
+    <p class="tip">Los cambios se aplican en vivo, incluso con el motor en marcha. Toca la ⓘ de cada parámetro para ver su efecto.</p>` },
+
+  p_nozType: { tag: 'Oficina de diseño · Tobera', t: 'Tipo de tobera', b: `
+    <ul><li><b>Convergente (bloqueada)</b>: con NPR &gt; 1.85 la garganta alcanza Mach 1. El gas sale con presión mayor a la ambiente y esa diferencia aporta empuje de presión A9·(P9 − P0). Es sencilla y ligera.</li><li><b>Convergente-divergente (adaptada)</b>: expande el gas hasta P0 y obtiene la máxima velocidad. Rinde más con NPR alta; es típica de motores supersónicos con área variable.</li></ul>`,
+    live: () => [['Tipo actual', NOZ_TYPES[design.nozType]], ['NPR de diseño', T.design.NPR ? nf(T.design.NPR, 2) : '—'], ['Empuje seco de diseño', T.design.valid ? nf(T.design.F / 1000, 1) + ' kN' : '—']] },
+
+  salidas: { tag: 'Oficina de diseño', t: 'Resultados del punto de diseño', b: `
+    <p>Desempeño calculado a 100 % N1, en condición estática a nivel del mar.</p>
+    <ul><li><b>Empuje específico F/ṁ</b>: empuje por cada kg/s de aire. Indica qué tan compacto es el motor.</li><li><b>TSFC</b>: consumo por unidad de empuje. Indica la eficiencia.</li><li><b>Eficiencia térmica</b>: energía cinética del chorro entre la energía del combustible.</li><li><b>Línea roja de EGT</b>: EGT de diseño + 40 °C. Es la que usa el indicador.</li><li><b>Margen de surge</b>: exceso de combustible que se tolera antes del surge.</li></ul>` },
+
+  ts: { tag: 'Oficina de diseño', t: 'Diagrama T-s (temperatura – entropía)', b: `
+    <ul><li><b>2 → 3</b> compresión: casi vertical; las pérdidas la inclinan a la derecha.</li><li><b>3 → 4</b> combustión a presión casi constante.</li><li><b>4 → 5</b> expansión en la turbina.</li><li><b>5 → 9</b> expansión en la tobera.</li><li><b>9 → 2</b> (punteado) rechazo de calor a la atmósfera, que cierra el ciclo.</li><li><b>Naranja</b>: rama del postquemador (5 → 7 → 9).</li></ul>
+    <p class="tip">Mueve η_c o η_t y observa cómo se inclinan las líneas de compresión y expansión: eso es la generación de entropía (pérdidas).</p>` },
+};
+
+/* ---------------- Ficha emergente ---------------- */
+const pop = $('pop'), popB = $('popB'), popT = $('popT'), popTag = $('popTag'), popLive = $('popLive');
+let popKey = null, popAnchor = null, popLiveT = 0;
+const LAMP_TXT = { '': 'Apagada', on: 'Activa', ok: 'Normal', armed: 'Armada', warn: 'PRECAUCIÓN', alarm: 'ALARMA' };
+
+function getInfo(key) {
+  if (key.startsWith('lamp:')) {
+    const a = ANN.find(x => x[0] === key.slice(5));
+    if (!a) return null;
+    return { tag: 'Anunciador', t: a[1].replace(/­/g, ''), b: `<p>${a[3]}</p>`, live: () => [['Estado actual', LAMP_TXT[a[2]()] || '—']] };
+  }
+  const p = DESIGN_PARAMS.find(x => 'p_' + x.key === key);
+  if (p) {
+    return {
+      tag: 'Oficina de diseño · ' + p.g, t: p.label, b: p.info,
+      live: () => {
+        const c = T.design;
+        return [['Valor actual', p.fmt(design[p.key])], ['Valor base', p.fmt(p.val)], ['Rango del simulador', p.fmt(p.min) + ' – ' + p.fmt(p.max)],
+          ['Empuje seco de diseño', c.valid ? nf(c.F / 1000, 1) + ' kN' : 'inviable'],
+          ['TSFC seco de diseño', c.valid ? nf(c.wf / c.F * 1e6, 1) + ' g/kN·s' : '—'],
+          ['EGT de diseño', c.valid ? degC(c.T5) : '—']];
+      }
+    };
+  }
+  return INFO[key] || null;
+}
+function renderLive() {
+  const e = popKey && getInfo(popKey);
+  if (!e || !e.live) { popLive.hidden = true; return; }
+  let rows;
+  try { rows = e.live(); } catch (err) { rows = [['Datos', 'no disponibles']]; }
+  popLive.hidden = false;
+  popLive.innerHTML = '<div class="lh">● DATOS EN VIVO</div><dl>' + rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') + '</dl>';
+}
+function placePop() {
+  if (pop.hidden) return;
+  if (window.innerWidth <= 820) { pop.style.left = ''; pop.style.top = ''; return; }
+  const W = window.innerWidth, Hh = window.innerHeight, pw = pop.offsetWidth, ph = pop.offsetHeight;
+  const r = popAnchor && popAnchor.isConnected ? popAnchor.getBoundingClientRect() : { left: W / 2, right: W / 2, top: Hh * 0.2, bottom: Hh * 0.2, width: 0 };
+  let left = r.right + 10;
+  if (left + pw > W - 12) left = r.left - pw - 10;
+  if (left < 12) left = clamp(r.left + r.width / 2 - pw / 2, 12, Math.max(12, W - pw - 12));
+  const top = clamp(r.top - 10, 12, Math.max(12, Hh - ph - 12));
+  pop.style.left = left + 'px'; pop.style.top = top + 'px';
+}
+function openInfo(key, anchor) {
+  const e = getInfo(key);
+  if (!e) return;
+  popKey = key; popAnchor = anchor || null;
+  popTag.textContent = e.tag || 'Información';
+  popT.textContent = e.t;
+  popB.innerHTML = e.b;
+  renderLive();
+  pop.hidden = false;
+  pop.scrollTop = 0;
+  placePop();
+  $('popX').focus({ preventScroll: true });
+}
+function closeInfo() {
+  pop.hidden = true; popKey = null;
+  if (popAnchor && popAnchor.focus && popAnchor.isConnected) popAnchor.focus({ preventScroll: true });
+  popAnchor = null;
+}
+$('popX').addEventListener('click', closeInfo);
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-info]');
+  if (b) {
+    e.preventDefault();
+    if (popKey === b.dataset.info && !pop.hidden) closeInfo();
+    else openInfo(b.dataset.info, b);
+    return;
+  }
+  if (!pop.hidden && !e.target.closest('#pop')) closeInfo();
+});
+window.addEventListener('resize', placePop);
+
+/* ---------------- Puntos sobre la vista del motor ---------------- */
+const HOTS = [
+  ['h_inlet', 'Admisión', 140, -66], ['h_comp', 'Compresor', 295, 74], ['h_comb', 'Cámara', 462, -82],
+  ['h_turb', 'Turbina', 578, 76], ['h_noz', 'Tobera', 705, -62], ['h_ab', 'Postquemador', 880, 40]
+];
+const hotEls = [];
+function buildHotspots() {
+  const host = $('hots');
+  HOTS.forEach(([key, label]) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'hot'; b.dataset.info = key;
+    b.setAttribute('aria-label', 'Información: ' + label);
+    b.innerHTML = `<i>i</i><span>${label}</span>`;
+    host.appendChild(b); hotEls.push(b);
+  });
+}
+function updateHotspots() {
+  if (!ui.eng || !document.body.classList.contains('info-on')) return;
+  const { sc, ox, oy } = ui.eng;
+  HOTS.forEach(([, , x, y], i) => {
+    const l = Math.round(ox + x * sc) + 'px', t = Math.round(oy + y * sc) + 'px';
+    const st = hotEls[i].style;
+    if (st.left !== l) st.left = l;
+    if (st.top !== t) st.top = t;
+  });
+}
+
+/* ---------------- Modo de información ---------------- */
+function setInfoMode(on) {
+  document.body.classList.toggle('info-on', on);
+  $('btnInfo').setAttribute('aria-pressed', String(on));
+  if (!on && popKey && !(popAnchor && popAnchor.id === 'btnGuide')) closeInfo();
+  try { localStorage.setItem('jtc_info', on ? '1' : '0'); } catch (e) {}
+}
+$('btnInfo').addEventListener('click', () => setInfoMode(!document.body.classList.contains('info-on')));
+
+function initInfo() {
+  buildHotspots();
+  let on = true, seen = false;
+  try { on = localStorage.getItem('jtc_info') !== '0'; seen = localStorage.getItem('jtc_seen') === '1'; localStorage.setItem('jtc_seen', '1'); } catch (e) {}
+  setInfoMode(on);
+  if (!seen) setTimeout(() => openInfo('guia', $('btnGuide')), 400);
+}
+
+/* Arranque de la aplicación */
+buildDesignUI();
+buildAnnun();
+updateDesignOutputs();
+setThrottle(0);
+syncButtons();
+updateAudioBtn();
+log('Celda de pruebas lista. Secuencia: ARRANCADOR → IGNICIÓN (N1 ≥ 12 %) → COMBUSTIBLE', 'ok');
+log('Toca los botones ⓘ o los puntos sobre el motor para ver la ficha técnica de cada elemento', 'info');
+initInfo();
+requestAnimationFrame(t => { last = t; requestAnimationFrame(frame); });
+</script>
+</body>
+</html>
